@@ -26,7 +26,7 @@ namespace Vecna.Configuration
 
         public PluginConfig(ConfigFile cfg)
         {
-            SpawnWeight = cfg.Bind("0. General", "Spawn weight", 64,
+            SpawnWeight = cfg.Bind("0. General", "Spawn weight", 30,
                 "The spawn chance weight for Vecna, relative to other existing enemies.");
 
             // Phase 1

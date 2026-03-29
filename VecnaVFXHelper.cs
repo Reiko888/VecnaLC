@@ -565,6 +565,15 @@ namespace Vecna
                         continue;
                     }
 
+                    bool isLocalVictim = (localPlayer == vecnaAI.cursingPlayer);
+                    if (isLocalVictim)
+                    {
+                        if (r.gameObject.layer == 23) continue;
+                        if (r == vecnaAI.cursingPlayer.thisPlayerModel ||
+                            r == vecnaAI.cursingPlayer.thisPlayerModelLOD1 ||
+                            r == vecnaAI.cursingPlayer.thisPlayerModelLOD2) continue;
+                    }
+
                     if (!vecnaAI.hiddenTeammateLayers.ContainsKey(r)) vecnaAI.hiddenTeammateLayers[r] = r.gameObject.layer;
                     r.gameObject.layer = VecnaAI.UPSIDE_DOWN_LAYER;
                 }

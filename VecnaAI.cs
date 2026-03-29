@@ -45,6 +45,7 @@ namespace Vecna
         public AudioClip liftTelekinesisClip;
         public AudioClip vecnafpexecution;
 
+        public bool canKill = false;
         public float SFXVolumeLerpTo = 1f;
         public AudioSource chimechase;
         public float maxChaseMusicVolume = 1.0f;
@@ -637,6 +638,23 @@ namespace Vecna
         private void LateUpdate()
         {
             this.portalManager?.UpdatePortalRotation();
+            if (IsVictimOrSpectatingVictim() &&
+       (this.currentLocalPhase == VecnaPhase.Chasing || this.currentLocalPhase == VecnaPhase.ExecutingKill))
+            {
+                PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
+                Camera mainCam = localPlayer.gameplayCamera;
+
+                if (localPlayer.isPlayerDead && StartOfRound.Instance.spectateCamera != null)
+                {
+                    mainCam = StartOfRound.Instance.spectateCamera;
+                }
+
+                if (mainCam != null)
+                {
+                    mainCam.cullingMask &= ~(1 << PORTAL_ONLY_LAYER);
+                    mainCam.cullingMask |= (1 << UPSIDE_DOWN_LAYER);
+                }
+            }
         }
 
         [ClientRpc]
@@ -741,7 +759,11 @@ namespace Vecna
                 {
                     if (!this.cursingPlayer.HasLineOfSightToPosition(node.transform.position, 80f, 100))
                     {
-                        validBlindSpots.Add(node);
+                        Vector3 clockCenter = node.transform.position + Vector3.up * 1.0f;
+                        if (!Physics.CheckSphere(clockCenter, 0.5f, StartOfRound.Instance.collidersAndRoomMask))
+                        {
+                            validBlindSpots.Add(node);
+                        }
                     }
                 }
             }
@@ -1156,6 +1178,7 @@ namespace Vecna
 
         public override void OnCollideWithPlayer(Collider other)
         {
+            if (!this.canKill) return;
             base.OnCollideWithPlayer(other);
 
             this.TriggerCinematicKill(this.cursingPlayer);
@@ -1168,6 +1191,7 @@ namespace Vecna
 
             if (!UpsideDownPlayers.Contains(victim)) UpsideDownPlayers.Add(victim);
             if (IsServer) this.currentPhase.Value = VecnaPhase.Chasing;
+            this.canKill = true;
             this.currentLocalPhase = VecnaPhase.Chasing;
             this.cursingPlayer = StartOfRound.Instance.allPlayerScripts[victimId];
             this.cursingLocalPlayer = (GameNetworkManager.Instance.localPlayerController == this.cursingPlayer);
@@ -1352,6 +1376,8 @@ namespace Vecna
                 scanNode.gameObject.SetActive(isVisible);
             }
 
+            int targetLayer = isVisible ? UPSIDE_DOWN_LAYER : PORTAL_ONLY_LAYER;
+
             foreach (Transform child in this.gameObject.GetComponentsInChildren<Transform>(true))
             {
                 if (child.name.Contains("MapDot"))
@@ -1359,6 +1385,7 @@ namespace Vecna
                     child.gameObject.SetActive(isVisible);
                 }
             }
+
         }
 
         [ClientRpc]
@@ -1397,6 +1424,7 @@ namespace Vecna
         {
             if (IsServer) this.currentPhase.Value = VecnaPhase.Cooldown;
             this.currentLocalPhase = VecnaPhase.Cooldown;
+            this.canKill = false;
             this.boomboxRescueTimer = 0f;
             this.isPortalOpen = false;
             this.portalManager?.DestroyEscapePortal();
