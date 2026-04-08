@@ -1,16 +1,17 @@
-﻿using GameNetcodeStuff;
+﻿﻿using GameNetcodeStuff;
 using HarmonyLib;
 using LethalLib.Modules;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using TMPro;
+using Unity.Collections;
+using Unity.Jobs;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.UIElements;
-using Unity.Collections;
-using Unity.Jobs;
+using static UnityEngine.GridBrushBase;
 
 namespace Vecna
 {
@@ -29,6 +30,14 @@ namespace Vecna
         private readonly WaitForSeconds wait0Point15Seconds = new WaitForSeconds(0.15f);
         private readonly WaitForEndOfFrame waitEndOfFrame = new WaitForEndOfFrame();
 
+        public VehicleController cinematicVehicle;
+        public float cinematicTimer = 0f;
+        public Vector3 vehicleStartPos;
+        public Vector3 vehicleTargetPos;
+        public bool vehicleReachedApex = false;
+        public Vector3 cinematicHoverPos;
+        public Quaternion cinematicHoverRot;
+
         public static List<VecnaAI> ActiveInstances = new List<VecnaAI>();
         public VecnaEnvironmentManipulator environmentTools;
         public VecnaAudioManager audioTools;
@@ -44,6 +53,7 @@ namespace Vecna
         public AudioClip doorTelekinesisClip;
         public AudioClip liftTelekinesisClip;
         public AudioClip vecnafpexecution;
+        public AudioClip vehicleLiftVoiceLine;
 
         public bool canKill = false;
         public float SFXVolumeLerpTo = 1f;
@@ -83,8 +93,8 @@ namespace Vecna
         private bool isVecnaVisible = true;
         public int storedCameraMask = -1;
         public Camera storedCamera = null;
-        public const int PORTAL_ONLY_LAYER = 31;
-        public const int UPSIDE_DOWN_LAYER = 30;
+        public const int PORTAL_ONLY_LAYER = 23; //EnemiesNotRendered
+        public const int UPSIDE_DOWN_LAYER = 31;
 
         private int timesChoosingAPlayer;
         private System.Random vecnaCurseRandom;
@@ -104,9 +114,9 @@ namespace Vecna
         public VecnaCinematicDirector cinematicDirector;
 
         [ServerRpc(RequireOwnership = false)]
-        public void RequestChaseStartServerRpc(int victimId, Vector3 spawnPos)
+        public void RequestChaseStartServerRpc(int victimId, Vector3 spawnPos, float timerOverride = -1f, bool fromVehicle = false)
         {
-            SyncChaseStartClientRpc(victimId, spawnPos);
+            SyncChaseStartClientRpc(victimId, spawnPos, timerOverride, fromVehicle);
         }
 
         [ServerRpc(RequireOwnership = false)]
@@ -121,12 +131,25 @@ namespace Vecna
             SyncCinematicKillClientRpc(victimId,stopPos, lookDir);
         }
 
+        [ServerRpc(RequireOwnership = false)]
+        public void StartVehicleCinematicServerRpc(ulong vehicleId, Vector3 spawnPos)
+        {
+            StartVehicleCinematicClientRpc(vehicleId, spawnPos);
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        public void DropVehicleServerRpc()
+        {
+            DropVehicleClientRpc();
+        }
         public enum VecnaPhase
         {
             Cooldown,
             ClockStalking,
             ClockSpotted,
             Chasing,
+            VehicleCinematic,
+            WaitingForVehicleExit,
             ExecutingKill
         }
 
@@ -134,6 +157,8 @@ namespace Vecna
         public NetworkVariable<VecnaPhase> currentPhase = new NetworkVariable<VecnaPhase>(VecnaPhase.Cooldown);
         public VecnaPhase currentLocalPhase = VecnaPhase.Cooldown;
         private IVecnaState currentState;
+
+        public bool isCinematicLiftStarted = false;
 
         public override void OnNetworkSpawn()
         {
@@ -156,7 +181,9 @@ namespace Vecna
                 case VecnaPhase.ClockStalking: currentState = new VecnaClockStalkingState(this); break;
                 case VecnaPhase.ClockSpotted: currentState = new VecnaClockSpottedState(this); break;
                 case VecnaPhase.Chasing: currentState = new VecnaChaseState(this); break;
+                case VecnaPhase.WaitingForVehicleExit: currentState = new VecnaWaitingForExitState(this); break;
                 case VecnaPhase.ExecutingKill: currentState = new VecnaExecutingKillState(this); break;
+                case VecnaPhase.VehicleCinematic: currentState = new VecnaVehicleCinematicState(this); break;
             }
             if (currentState != null) currentState.Enter();
 
@@ -308,6 +335,7 @@ namespace Vecna
                 this.cachedBoomboxes = FindObjectsOfType<BoomboxItem>();
             }
         }
+
 
         public override void OnDestroy()
         {
@@ -489,19 +517,15 @@ namespace Vecna
 
         private void UpdateGlobalVisuals()
         {
-            bool shouldSeeVecna = (this.currentLocalPhase == VecnaPhase.Chasing || this.currentLocalPhase == VecnaPhase.ExecutingKill) && IsVictimOrSpectatingVictim();
+            bool shouldSeeVecna = ((this.currentLocalPhase == VecnaPhase.Chasing || this.currentLocalPhase == VecnaPhase.ExecutingKill || this.currentLocalPhase == VecnaPhase.VehicleCinematic && !this.isCinematicLiftStarted)) && IsVictimOrSpectatingVictim();
 
-            if (this.skinnedMeshRenderers != null && this.skinnedMeshRenderers.Length > 0)
-            {
-                if (this.skinnedMeshRenderers[0].enabled != shouldSeeVecna)
-                {
-                    this.ToggleGhostVisuals(shouldSeeVecna);
-                }
-            }
-            else if (this.isVecnaVisible != shouldSeeVecna)
+            bool mainMeshMatches = (this.skinnedMeshRenderers != null && this.skinnedMeshRenderers.Length > 0 && this.skinnedMeshRenderers[0].enabled == shouldSeeVecna);
+
+            if (this.isVecnaVisible != shouldSeeVecna || !mainMeshMatches)
             {
                 this.ToggleGhostVisuals(shouldSeeVecna);
             }
+
             if (GameNetworkManager.Instance.localPlayerController.isPlayerDead)
             {
                 bool spectatingVictim = IsVictimOrSpectatingVictim();
@@ -638,8 +662,26 @@ namespace Vecna
         private void LateUpdate()
         {
             this.portalManager?.UpdatePortalRotation();
+
+            if (this.currentLocalPhase == VecnaPhase.VehicleCinematic)
+            {
+                if (this.creatureAnimator != null)
+                {
+                    this.creatureAnimator.transform.position = this.cinematicHoverPos;
+                    this.creatureAnimator.transform.rotation = this.cinematicHoverRot;
+                }
+            }
+            else
+            {
+                if (this.creatureAnimator != null && this.creatureAnimator.transform.localPosition != Vector3.zero)
+                {
+                    this.creatureAnimator.transform.localPosition = Vector3.zero;
+                    this.creatureAnimator.transform.localRotation = Quaternion.identity;
+                }
+            }
+
             if (IsVictimOrSpectatingVictim() &&
-       (this.currentLocalPhase == VecnaPhase.Chasing || this.currentLocalPhase == VecnaPhase.ExecutingKill))
+        (this.currentLocalPhase == VecnaPhase.Chasing || this.currentLocalPhase == VecnaPhase.ExecutingKill || this.currentLocalPhase == VecnaPhase.VehicleCinematic))
             {
                 PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
                 Camera mainCam = localPlayer.gameplayCamera;
@@ -705,6 +747,15 @@ namespace Vecna
         {
             if (this.cursingPlayer == null || this.currentClock == null) return false;
 
+            VehicleController car = GetPlayerVehicle(this.cursingPlayer);
+            if (car != null)
+            {
+                Vector3 dirToClock = (this.currentClock.transform.position - this.cursingPlayer.gameplayCamera.transform.position).normalized;
+                float angle = Vector3.Angle(this.cursingPlayer.gameplayCamera.transform.forward, dirToClock);
+
+                return angle < 50f;
+            }
+
             Camera playerCam = this.cursingPlayer.gameplayCamera;
             if (playerCam == null) return false;
 
@@ -745,7 +796,25 @@ namespace Vecna
 
         public bool TrySpawningClock()
         {
-            if (this.cursingPlayer == null || this.insideNodes == null || this.outsideNodes == null) return false;
+            if (this.cursingPlayer == null) return false;
+
+            VehicleController car = GetPlayerVehicle(this.cursingPlayer);
+            if (car != null)
+            {
+                Vector3 hoodPos = car.transform.position + (car.transform.forward * 3.8f) + (car.transform.up * -1.5f);
+
+                if (IsServer)
+                {
+                    SpawnClockClientRpc(hoodPos, this.clocksSpawned, car.NetworkObjectId);
+                    if (this.clocksSpawned == 1) SpawnFakeBodyClientRpc(hoodPos, car.NetworkObjectId);
+                }
+
+                this.stareTimer = 0f;
+                this.unspottedTimer = 0f;
+                return true;
+            }
+
+            if (this.insideNodes == null || this.outsideNodes == null) return false;
 
             GameObject[] nodesToCheck = this.cursingPlayer.isInsideFactory ? this.insideNodes : this.outsideNodes;
             List<GameObject> validBlindSpots = new List<GameObject>();
@@ -774,18 +843,15 @@ namespace Vecna
                 Vector3 rawSpawnPos = validBlindSpots[randomSpot].transform.position;
                 Vector3 finalSpawnPos = rawSpawnPos;
 
-                if (NavMesh.SamplePosition(rawSpawnPos, out NavMeshHit navHit, 5f, NavMesh.AllAreas))
+                if (UnityEngine.AI.NavMesh.SamplePosition(rawSpawnPos, out UnityEngine.AI.NavMeshHit navHit, 5f, UnityEngine.AI.NavMesh.AllAreas))
                 {
                     finalSpawnPos = navHit.position;
                 }
 
                 if (IsServer)
                 {
-                    SpawnClockClientRpc(finalSpawnPos, this.clocksSpawned);
-                    if (this.clocksSpawned == 1)
-                    {
-                        SpawnFakeBodyClientRpc(finalSpawnPos);
-                    }
+                    SpawnClockClientRpc(finalSpawnPos, this.clocksSpawned, 0);
+                    if (this.clocksSpawned == 1) SpawnFakeBodyClientRpc(finalSpawnPos);
                 }
                 this.stareTimer = 0f;
                 this.unspottedTimer = 0f;
@@ -817,33 +883,51 @@ namespace Vecna
         }
 
         [ClientRpc]
-        public void SpawnFakeBodyClientRpc(Vector3 clockPos)
+        public void SpawnFakeBodyClientRpc(Vector3 clockPos, ulong vehicleId = 0)
         {
+            Vector3 targetFloorPos = clockPos;
+            Quaternion bodyRot = Quaternion.identity;
             Vector3 dirToPlayer = Vector3.forward;
-            if (this.cursingPlayer != null)
+
+            VehicleController car = null;
+            if (vehicleId != 0 && NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(vehicleId, out NetworkObject carObj))
             {
-                dirToPlayer = (this.cursingPlayer.transform.position - clockPos);
-                dirToPlayer.y = 0f;
-                if (dirToPlayer != Vector3.zero) dirToPlayer.Normalize();
+                car = carObj.GetComponent<VehicleController>();
             }
 
-            Vector3 targetFloorPos = clockPos + (dirToPlayer * 2.5f);
-
-            if (Physics.Raycast(clockPos + Vector3.up * 0.5f, dirToPlayer, out RaycastHit hit, 2.5f, StartOfRound.Instance.collidersAndRoomMask))
+            if (car != null)
             {
-                targetFloorPos = hit.point - (dirToPlayer * 0.5f);
-            }
+                targetFloorPos = car.transform.position + (car.transform.forward * 3.2f) + (car.transform.up * 1.0f);
 
-            if (UnityEngine.AI.NavMesh.SamplePosition(targetFloorPos, out UnityEngine.AI.NavMeshHit navHit, 3f, UnityEngine.AI.NavMesh.AllAreas))
+                dirToPlayer = -car.transform.forward;
+                bodyRot = Quaternion.LookRotation(dirToPlayer);
+            }
+            else
             {
-                targetFloorPos = navHit.position;
-            }
+                if (this.cursingPlayer != null)
+                {
+                    dirToPlayer = (this.cursingPlayer.transform.position - clockPos);
+                    dirToPlayer.y = 0f;
+                    if (dirToPlayer != Vector3.zero) dirToPlayer.Normalize();
+                }
 
-            Vector3 bodyPos = targetFloorPos + (Vector3.up * 1.5f);
-            Quaternion bodyRot = Quaternion.LookRotation(dirToPlayer);
+                targetFloorPos = clockPos + (dirToPlayer * 2.5f);
+
+                if (Physics.Raycast(clockPos + Vector3.up * 0.5f, dirToPlayer, out RaycastHit hit, 2.5f, StartOfRound.Instance.collidersAndRoomMask))
+                {
+                    targetFloorPos = hit.point - (dirToPlayer * 0.5f);
+                }
+
+                if (UnityEngine.AI.NavMesh.SamplePosition(targetFloorPos, out UnityEngine.AI.NavMeshHit navHit, 3f, UnityEngine.AI.NavMesh.AllAreas))
+                {
+                    targetFloorPos = navHit.position;
+                }
+                targetFloorPos += (Vector3.up * 1.5f);
+                bodyRot = Quaternion.LookRotation(dirToPlayer);
+            }
 
             GameObject nativeRagdollPrefab = this.cursingPlayer.playersManager.playerRagdolls[0];
-            this.cinematicDirector.activeFakeBody = Instantiate(nativeRagdollPrefab, bodyPos, bodyRot);
+            this.cinematicDirector.activeFakeBody = Instantiate(nativeRagdollPrefab, targetFloorPos, bodyRot);
 
             List<PlayerControllerB> alivePlayers = new List<PlayerControllerB>();
             foreach (PlayerControllerB p in StartOfRound.Instance.allPlayerScripts)
@@ -858,9 +942,7 @@ namespace Vecna
             if (bodyInfo != null)
             {
                 bodyInfo.playerObjectId = (int)randomVictim.playerClientId;
-
                 bodyInfo.overrideSpawnPosition = true;
-
                 bodyInfo.setMaterialToPlayerSuit = true;
 
                 if (bodyInfo.grabBodyObject != null)
@@ -870,10 +952,10 @@ namespace Vecna
                 }
             }
 
-            StartCoroutine(FinalizeFakeBodyRoutine(this.cinematicDirector.activeFakeBody, randomVictim, dirToPlayer, this.cursingLocalPlayer));
+            StartCoroutine(FinalizeFakeBodyRoutine(this.cinematicDirector.activeFakeBody, randomVictim, dirToPlayer, this.cursingLocalPlayer, car));
         }
 
-        private IEnumerator FinalizeFakeBodyRoutine(GameObject fakeBody, PlayerControllerB victim, Vector3 dirToPlayer, bool isLocalPlayer)
+        private IEnumerator FinalizeFakeBodyRoutine(GameObject fakeBody, PlayerControllerB victim, Vector3 dirToPlayer, bool isLocalPlayer, VehicleController car = null)
         {
             yield return waitEndOfFrame;
             if (fakeBody == null || victim == null) yield break;
@@ -896,7 +978,14 @@ namespace Vecna
 
             foreach (Rigidbody rb in fakeBody.GetComponentsInChildren<Rigidbody>())
             {
-                rb.AddForce(dirToPlayer * 5f + Vector3.down * 4f, ForceMode.Impulse);
+                if (car != null)
+                {
+                    rb.AddForce((-car.transform.forward * 9f) + (car.transform.up * 3.5f), ForceMode.Impulse);
+                }
+                else
+                {
+                    rb.AddForce(dirToPlayer * 5f + Vector3.down * 4f, ForceMode.Impulse);
+                }
             }
 
             if (!isLocalPlayer)
@@ -910,7 +999,7 @@ namespace Vecna
         }
 
         [ClientRpc]
-        public void SpawnClockClientRpc(Vector3 spawnPos, int currentClockCount)
+        public void SpawnClockClientRpc(Vector3 spawnPos, int currentClockCount, ulong parentVehicleId = 0)
         {
             try
             {
@@ -918,6 +1007,16 @@ namespace Vecna
 
                 this.currentClock = Instantiate(Plugin.ClockPrefab, spawnPos, Quaternion.identity);
                 if (this.currentClock == null) return;
+
+                VehicleController parentCar = null;
+                if (parentVehicleId != 0 && NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(parentVehicleId, out NetworkObject carObj))
+                {
+                    parentCar = carObj.GetComponent<VehicleController>();
+                    if (parentCar != null)
+                    {
+                        this.currentClock.transform.SetParent(parentCar.transform, true);
+                    }
+                }
 
                 AudioSource[] clockAudios = this.currentClock.GetComponentsInChildren<AudioSource>(true);
                 foreach (AudioSource audio in clockAudios)
@@ -930,17 +1029,21 @@ namespace Vecna
                 }
 
                 Vector3 bestDirection = Vector3.forward;
-
                 Vector3 dirToPlayer = Vector3.forward;
+
                 if (this.cursingPlayer != null)
                 {
-                    dirToPlayer = (this.cursingPlayer.transform.position - spawnPos);
+                    dirToPlayer = (this.cursingPlayer.transform.position - this.currentClock.transform.position);
                     dirToPlayer.y = 0f;
                     if (dirToPlayer != Vector3.zero) dirToPlayer.Normalize();
                     else dirToPlayer = Vector3.forward;
                 }
 
-                if (this.cursingPlayer != null && !this.cursingPlayer.isInsideFactory)
+                if (parentCar != null)
+                {
+                    bestDirection = dirToPlayer;
+                }
+                else if (this.cursingPlayer != null && !this.cursingPlayer.isInsideFactory)
                 {
                     bestDirection = dirToPlayer;
                 }
@@ -952,7 +1055,7 @@ namespace Vecna
 
                     NativeArray<RaycastCommand> commands = new NativeArray<RaycastCommand>(numRays, Allocator.TempJob);
                     NativeArray<RaycastHit> results = new NativeArray<RaycastHit>(numRays, Allocator.TempJob);
-                    
+
                     Vector3 rayOrigin = spawnPos + Vector3.up * 0.5f;
                     QueryParameters query = new QueryParameters(wallMask, false, QueryTriggerInteraction.Ignore, false);
 
@@ -990,23 +1093,38 @@ namespace Vecna
                 {
                     this.currentClock.transform.rotation = Quaternion.LookRotation(bestDirection);
                     this.currentClock.transform.Rotate(0, 90f, 0, Space.Self);
-                    GameObject clockLightObj = new GameObject("VecnaClockLight");
-                    clockLightObj.transform.position = this.currentClock.transform.position + (Vector3.up * 0.1f) + (bestDirection * 0.8f);
-                    clockLightObj.transform.SetParent(this.currentClock.transform, true);
 
-                    Light turquoiseLight = clockLightObj.AddComponent<Light>();
-                    turquoiseLight.type = LightType.Spot;
-                    turquoiseLight.spotAngle = 110f;
-                    turquoiseLight.innerSpotAngle = 40f;
-                    turquoiseLight.color = new Color(0.1f, 0.9f, 0.8f, 1f);
-                    turquoiseLight.intensity = 20f;
-                    turquoiseLight.range = 12f;
-                    turquoiseLight.shadows = LightShadows.Soft;
+                    if (parentCar == null)
+                    {
+                        GameObject clockLightObj = new GameObject("VecnaClockLight");
+                        clockLightObj.transform.position = this.currentClock.transform.position + (Vector3.up * 0.1f) + (bestDirection * 0.8f);
+                        clockLightObj.transform.SetParent(this.currentClock.transform, true);
 
-                    Vector3 clockFacePos = this.currentClock.transform.position + (Vector3.up * 2.2f);
-                    clockLightObj.transform.LookAt(clockFacePos);
+                        Light turquoiseLight = clockLightObj.AddComponent<Light>();
+                        turquoiseLight.type = LightType.Spot;
+                        turquoiseLight.spotAngle = 110f;
+                        turquoiseLight.innerSpotAngle = 40f;
+                        turquoiseLight.color = new Color(0.1f, 0.9f, 0.8f, 1f);
+                        turquoiseLight.intensity = 20f;
+                        turquoiseLight.range = 12f;
+                        turquoiseLight.shadows = LightShadows.Soft;
+
+                        Vector3 clockFacePos = this.currentClock.transform.position + (Vector3.up * 2.2f);
+                        clockLightObj.transform.LookAt(clockFacePos);
+                    }
+                    else
+                    {
+                        GameObject carClockLightObj = new GameObject("VecnaCarClockLight");
+                        carClockLightObj.transform.position = this.currentClock.transform.position + (Vector3.up * 1.25f) + (bestDirection * 0.4f);
+                        carClockLightObj.transform.SetParent(this.currentClock.transform, true);
+
+                        Light dimWhiteLight = carClockLightObj.AddComponent<Light>();
+                        dimWhiteLight.type = LightType.Point; 
+                        dimWhiteLight.color = new Color(0.8f, 0.8f, 0.8f, 1f); 
+                        dimWhiteLight.intensity = 1.5f; 
+                        dimWhiteLight.range = 2.5f; 
+                    }
                 }
-
 
                 if (!this.cursingLocalPlayer)
                 {
@@ -1017,7 +1135,6 @@ namespace Vecna
 
                     Light[] clockLights = this.currentClock.GetComponentsInChildren<Light>(true);
                     foreach (Light l in clockLights) l.enabled = false;
-
                 }
             }
             catch (Exception e)
@@ -1035,7 +1152,6 @@ namespace Vecna
             {
                 victim.JumpToFearLevel(0.8f, true);
                 CancelInvoke(nameof(PlayDelayedChime));
-                ;
 
                 if (currentClockCount == 0 && this.finalChimeClip != null)
                 {
@@ -1047,7 +1163,6 @@ namespace Vecna
                     this.audioTools.PlayClockSpotTaunt();
                 }
             }
-
         }
 
         private void PlayDelayedChime()
@@ -1089,8 +1204,300 @@ namespace Vecna
 
             if (isFinalClock)
             {
+                VehicleController car = GetPlayerVehicle(this.cursingPlayer);
+                if (this.cursingPlayer != null && car == null)
+                {
+                    VehicleController[] allVehicles = FindObjectsOfType<VehicleController>();
+                    foreach (VehicleController v in allVehicles)
+                    {
+                        if (v.currentDriver == this.cursingPlayer || v.currentPassenger == this.cursingPlayer)
+                        {
+                            car = v;
+                            break;
+                        }
+                    }
+                }
+
+                if (car != null)
+                {
+                    this.cinematicVehicle = car;
+                    this.currentPhase.Value = VecnaPhase.VehicleCinematic;
+
+                    this.cinematicTimer = -999f;
+
+                    StartCoroutine(StopVehicleAndSpawnVecnaRoutine(car));
+                    return;
+                }
+
                 this.StartChase();
             }
+        }
+
+        private IEnumerator StopVehicleAndSpawnVecnaRoutine(VehicleController car)
+        {
+            ForceVehicleStopClientRpc(car.NetworkObjectId);
+
+            if (car.mainRigidbody != null)
+            {
+                float timeout = 4.0f; 
+                while (car.mainRigidbody.velocity.magnitude > 0.5f && timeout > 0)
+                {
+                    timeout -= Time.deltaTime;
+                    yield return null;
+                }
+            }
+
+            yield return new WaitForSeconds(1.0f);
+
+            Vector3 carPos = car.transform.position;
+            Vector3 flatForward = car.transform.forward;
+            flatForward.y = 0f;
+            if (flatForward == Vector3.zero) flatForward = car.transform.up;
+            flatForward.Normalize();
+
+            Vector3 frontBumper = carPos + (flatForward * 4.5f);
+            Vector3 desiredSpawnPos = frontBumper + (flatForward * 4.5f);
+            Vector3 finalSpawnPos = desiredSpawnPos;
+
+            if (Physics.Raycast(frontBumper + (Vector3.up * 0.5f), flatForward, out RaycastHit hit, 5.5f, StartOfRound.Instance.collidersAndRoomMask))
+            {
+                finalSpawnPos = hit.point - (flatForward * 1.5f);
+            }
+
+            float hoverHeight = carPos.y;
+
+            Vector3 skyPos = finalSpawnPos + (Vector3.up * 15f);
+            if (Physics.Raycast(skyPos, Vector3.down, out RaycastHit groundHit, 30f, StartOfRound.Instance.collidersAndRoomMask))
+            {
+                if (groundHit.point.y > hoverHeight)
+                {
+                    finalSpawnPos.y = groundHit.point.y;
+                }
+                else
+                {
+                    finalSpawnPos.y = hoverHeight;
+                }
+            }
+            else
+            {
+                finalSpawnPos.y = hoverHeight;
+            }
+
+            if (Physics.Raycast(finalSpawnPos + (Vector3.up * 0.5f), Vector3.up, out RaycastHit ceilingHit, 2.5f, StartOfRound.Instance.collidersAndRoomMask))
+            {
+                finalSpawnPos.y -= (2.5f - ceilingHit.distance);
+            }
+
+            StartVehicleCinematicServerRpc(car.NetworkObjectId, finalSpawnPos);
+        }
+
+        [ClientRpc]
+        public void ForceVehicleStopClientRpc(ulong vehicleId)
+        {
+            if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(vehicleId, out NetworkObject vehicleObj))
+            {
+                VehicleController car = vehicleObj.GetComponent<VehicleController>();
+                if (car != null)
+                {
+                    car.SetIgnition(false);
+
+                    if (car.mainRigidbody != null)
+                    {
+                        StartCoroutine(ApplyBrakesRoutine(car));
+                    }
+                }
+            }
+        }
+
+        private IEnumerator ApplyBrakesRoutine(VehicleController car)
+        {
+            float originalDrag = car.mainRigidbody.drag;
+            car.mainRigidbody.drag = 5f; 
+
+            while (car.mainRigidbody.velocity.magnitude > 0.1f)
+            {
+                yield return null;
+            }
+
+            car.mainRigidbody.velocity = Vector3.zero;
+            car.mainRigidbody.drag = originalDrag;
+        }
+
+        [ClientRpc]
+        public void StartVehicleCinematicClientRpc(ulong vehicleId, Vector3 spawnPos)
+        {
+            this.currentLocalPhase = VecnaPhase.VehicleCinematic;
+            this.isCinematicLiftStarted = false;
+            this.inSpecialAnimation = true;
+            this.enemyType.disableAnimatorWhenFar = false;
+
+            if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(vehicleId, out NetworkObject vehicleObj))
+            {
+                cinematicVehicle = vehicleObj.GetComponent<VehicleController>();
+
+                if (cinematicVehicle != null)
+                {
+                    this.currentLocalPhase = VecnaPhase.VehicleCinematic;
+                    this.canKill = false;
+                    this.isOutside = true;
+
+                    this.cinematicHoverPos = spawnPos;
+
+                    Vector3 dirToCar = cinematicVehicle.transform.position - spawnPos;
+                    dirToCar.y = 0;
+                    this.cinematicHoverRot = dirToCar != Vector3.zero ? Quaternion.LookRotation(dirToCar) : Quaternion.identity;
+
+                    if (this.agent != null && this.agent.isActiveAndEnabled)
+                    {
+                        this.agent.speed = 0f;
+
+                        if (Physics.Raycast(spawnPos, Vector3.down, out RaycastHit hit, 50f, StartOfRound.Instance.collidersAndRoomMask))
+                        {
+                            if (UnityEngine.AI.NavMesh.SamplePosition(hit.point, out UnityEngine.AI.NavMeshHit navHit, 10f, UnityEngine.AI.NavMesh.AllAreas))
+                            {
+                                this.agent.Warp(navHit.position);
+                            }
+                            else
+                            {
+                                this.agent.Warp(hit.point);
+                            }
+                        }
+                    }
+
+                    if (this.cursingLocalPlayer)
+                    {
+                        if (!UpsideDownPlayers.Contains(this.cursingPlayer)) UpsideDownPlayers.Add(this.cursingPlayer);
+
+                        Camera mainCam = GameNetworkManager.Instance.localPlayerController.gameplayCamera;
+                        if (mainCam != null)
+                        {
+                            mainCam.cullingMask &= ~(1 << PORTAL_ONLY_LAYER);
+                            mainCam.cullingMask |= (1 << UPSIDE_DOWN_LAYER);
+                        }
+
+                        this.ToggleGhostVisuals(true);
+                        this.cursingPlayer.JumpToFearLevel(1f, true);
+                        VecnaVFXHelper.ToggleTeammatesForVictim(this, false);
+
+                        foreach (EnemyAI enemy in RoundManager.Instance.SpawnedEnemies)
+                        {
+                            if (enemy != null && enemy != this)
+                            {
+                                foreach (AudioSource source in enemy.GetComponentsInChildren<AudioSource>(true))
+                                    if (source != null) source.mute = true;
+                            }
+                        }
+                        foreach (BoomboxItem boombox in FindObjectsOfType<BoomboxItem>())
+                            if (boombox != null && boombox.boomboxAudio != null) boombox.boomboxAudio.mute = true;
+                        if (this.vehicleLiftVoiceLine != null && this.creatureVoice != null)
+                        {
+                            this.creatureVoice.PlayOneShot(this.vehicleLiftVoiceLine, 1f);
+                        }
+                        else
+                        {
+                            this.audioTools.PlayClockSpotTaunt();
+                        }
+                    }
+                    else
+                    {
+                        this.ToggleGhostVisuals(false);
+                    }
+
+                    if (this.creatureAnimator != null)
+                    {
+                        this.creatureAnimator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+
+                        this.creatureAnimator.ResetTrigger(AnimBlastDoor);
+                        this.creatureAnimator.ResetTrigger(AnimBlastDoorDone);
+                        this.creatureAnimator.Update(0f);
+                    }
+
+                    cinematicTimer = -4f;
+                    vehicleReachedApex = false;
+                    vehicleStartPos = cinematicVehicle.transform.position;
+                    vehicleTargetPos = vehicleStartPos + new Vector3(0, 14f, 0);
+
+                    
+
+                    if (cinematicVehicle.mainRigidbody != null)
+                    {
+                        cinematicVehicle.mainRigidbody.isKinematic = false;
+                        cinematicVehicle.mainRigidbody.useGravity = false;
+                    }
+                    cinematicVehicle.SetIgnition(false);
+                }
+            }
+        }
+
+        public void EndCinematicAndWaitForExit()
+        {
+            if (IsServer)
+            {
+                DropVehicleServerRpc();
+
+                if (this.cursingPlayer != null && !this.cursingPlayer.isPlayerDead)
+                {
+                    this.currentPhase.Value = VecnaPhase.WaitingForVehicleExit;
+                }
+                else
+                {
+                    ResetHaunt(repelledByMusic: false, playerKilled: false);
+                }
+            }
+        }
+
+        [ClientRpc]
+        public void DropVehicleClientRpc()
+        {
+            this.currentLocalPhase = VecnaPhase.WaitingForVehicleExit;
+            try
+            {
+                if (this.cinematicVehicle.driverSideDoor != null && !this.cinematicVehicle.driverSideDoor.boolValue)
+                {
+                    this.cinematicVehicle.driverSideDoor.SetBoolOnClientOnly(true);
+                }
+                if (this.cinematicVehicle.passengerSideDoor != null && !this.cinematicVehicle.passengerSideDoor.boolValue)
+                {
+                    this.cinematicVehicle.passengerSideDoor.SetBoolOnClientOnly(true);
+                }
+
+                this.cinematicVehicle.SetBackDoorOpen(true);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("VECNA: Safely caught door animation error during drop: " + e.Message);
+            }
+            if (this.creatureAnimator != null)
+            {
+                this.creatureAnimator.ResetTrigger("blastDoor");
+                this.creatureAnimator.SetTrigger("blastDoorDone");
+            }
+
+            if (this.cinematicVehicle != null && this.cinematicVehicle.mainRigidbody != null)
+            {
+                this.cinematicVehicle.mainRigidbody.isKinematic = false;
+                this.cinematicVehicle.mainRigidbody.useGravity = true;
+
+                this.cinematicVehicle.mainRigidbody.AddForce(Vector3.down * 40f, ForceMode.VelocityChange);
+            }
+
+            this.cinematicVehicle = null;
+        }
+
+        public VehicleController GetPlayerVehicle(PlayerControllerB player)
+        {
+            if (player == null) return null;
+
+            VehicleController[] allVehicles = FindObjectsOfType<VehicleController>();
+            foreach (VehicleController v in allVehicles)
+            {
+                if (v.currentDriver == player || v.currentPassenger == player) return v;
+            }
+
+            VehicleController parentVehicle = player.GetComponentInParent<VehicleController>();
+            if (parentVehicle != null) return parentVehicle;
+
+            return null;
         }
 
         [ClientRpc]
@@ -1111,9 +1518,10 @@ namespace Vecna
             return playerToCheck != null && UpsideDownPlayers.Contains(playerToCheck);
         }
 
-        private void StartChase()
+        public void StartChase()
         {
             if (this.cursingPlayer == null) return;
+            if (this.agent != null) this.agent.enabled = true;
 
             this.targetPlayer = this.cursingPlayer;
 
@@ -1185,18 +1593,26 @@ namespace Vecna
         }
 
         [ClientRpc]
-        public void SyncChaseStartClientRpc(int victimId, Vector3 spawnPos)
+        public void SyncChaseStartClientRpc(int victimId, Vector3 spawnPos, float timerOverride = -1f, bool fromVehicle = false)
         {
             PlayerControllerB victim = StartOfRound.Instance.allPlayerScripts[victimId];
 
             if (!UpsideDownPlayers.Contains(victim)) UpsideDownPlayers.Add(victim);
             if (IsServer) this.currentPhase.Value = VecnaPhase.Chasing;
-            this.canKill = true;
+            if (timerOverride > 0f) StartCoroutine(DelayKillSwitchRoutine());
+            else this.canKill = true;
             this.currentLocalPhase = VecnaPhase.Chasing;
+            this.inSpecialAnimation = false;
+            if (this.creatureAnimator != null)
+            {
+                this.creatureAnimator.transform.localPosition = Vector3.zero;
+                this.creatureAnimator.transform.localRotation = Quaternion.identity;
+            }
             this.cursingPlayer = StartOfRound.Instance.allPlayerScripts[victimId];
             this.cursingLocalPlayer = (GameNetworkManager.Instance.localPlayerController == this.cursingPlayer);
 
             float calculatedChaseTime = this.audioTools.GetChaseMusicLength();
+            if (timerOverride > 0f) calculatedChaseTime = timerOverride;
             if (this.cursingLocalPlayer)
             {
                 this.audioTools.StartChaseMusic(0.6f);
@@ -1206,17 +1622,27 @@ namespace Vecna
             this.isPortalOpen = false;
             this.serverPosition = spawnPos;
             this.transform.position = spawnPos;
-            if (this.agent.isActiveAndEnabled)
+            this.isOutside = !this.cursingPlayer.isInsideFactory;
+
+            if (this.agent != null)
             {
-                this.agent.Warp(spawnPos);
+                this.agent.enabled = true;
+
+                if (this.agent.isActiveAndEnabled)
+                {
+                    this.agent.Warp(spawnPos);
+                }
+                this.agent.speed = this.stats.chaseSpeed;
             }
-            this.agent.speed = this.stats.chaseSpeed;
 
             if (this.cursingLocalPlayer)
             {
                 this.ToggleGhostVisuals(true);
                 this.cursingPlayer.JumpToFearLevel(1f, true);
-                VecnaVFXHelper.ToggleTeammatesForVictim(this, false);
+                if (this.hiddenTeammateLayers.Count == 0)
+                {
+                    VecnaVFXHelper.ToggleTeammatesForVictim(this, false);
+                }
 
                 foreach (EnemyAI enemy in RoundManager.Instance.SpawnedEnemies)
                 {
@@ -1241,7 +1667,7 @@ namespace Vecna
 
             if (HUDManager.Instance != null && this.cursingLocalPlayer)
             {
-                HUDManager.Instance.DisplayTip("VECNA", "He is here... survive 60 seconds.", isWarning: true);
+                HUDManager.Instance.DisplayTip("VECNA", "He is here... Outrun time", isWarning: true);
             }
 
             if (this.activeClone != null)
@@ -1253,6 +1679,61 @@ namespace Vecna
             if (Plugin.ClonePrefab != null)
             {
                 Vector3 cloneSpawnPos = this.cursingPlayer.transform.position;
+                Quaternion cloneRot = this.cursingPlayer.transform.rotation;
+
+                if (fromVehicle)
+                {
+                    VehicleController car = GetPlayerVehicle(this.cursingPlayer);
+                    if (car != null)
+                    {
+                        bool isDriver = (car.currentDriver == this.cursingPlayer);
+
+                        Vector3 sideDirection = isDriver ? -car.transform.right : car.transform.right;
+
+                        Vector3 baseSidePos = car.transform.position + (sideDirection * 3.5f);
+
+                        Vector3 rayStart = baseSidePos + (Vector3.up * 2f);
+                        if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, 40f, StartOfRound.Instance.collidersAndRoomMask))
+                        {
+                            cloneSpawnPos = hit.point; 
+                        }
+                        else
+                        {
+                            cloneSpawnPos = baseSidePos - (Vector3.up * 14f);
+                        }
+
+                        cloneRot = Quaternion.LookRotation(sideDirection);
+
+                        try
+                        {
+                            InteractTrigger[] doorTriggers = car.GetComponentsInChildren<InteractTrigger>(true);
+                            foreach (InteractTrigger trigger in doorTriggers)
+                            {
+                                string tName = trigger.gameObject.name.ToLower();
+                                Transform parent = trigger.transform.parent;
+                                string pName = parent != null ? parent.name.ToLower() : "";
+
+                                if (isDriver && (tName.Contains("left") || tName.Contains("driver") || pName.Contains("left") || pName.Contains("driver")))
+                                {
+                                    trigger.onInteract?.Invoke(this.cursingPlayer);
+                                    break;
+                                }
+                                else if (!isDriver && (tName.Contains("right") || tName.Contains("passenger") || pName.Contains("right") || pName.Contains("passenger")))
+                                {
+                                    trigger.onInteract?.Invoke(this.cursingPlayer);
+                                    break;
+                                }
+                            }
+
+                            car.SetBackDoorOpen(true);
+                        }
+                        catch (Exception e)
+                        {
+                            Debug.LogWarning("VECNA: Safely caught door animation error: " + e.Message);
+                        }
+                    }
+                }
+
                 this.activeClone = Instantiate(Plugin.ClonePrefab, cloneSpawnPos, this.cursingPlayer.transform.rotation);
 
                 this.activeClone.transform.localScale = Vector3.one;
@@ -1365,7 +1846,14 @@ namespace Vecna
             }
         }
 
-        private void ToggleGhostVisuals(bool isVisible)
+        private IEnumerator DelayKillSwitchRoutine()
+        {
+            this.canKill = false;
+            yield return new WaitForSeconds(4.5f);
+            this.canKill = true;
+        }
+
+        public void ToggleGhostVisuals(bool isVisible)
         {
             this.isVecnaVisible = isVisible;
             this.EnableEnemyMesh(isVisible, true);
@@ -1377,6 +1865,7 @@ namespace Vecna
             }
 
             int targetLayer = isVisible ? UPSIDE_DOWN_LAYER : PORTAL_ONLY_LAYER;
+            this.gameObject.layer = targetLayer;
 
             foreach (Transform child in this.gameObject.GetComponentsInChildren<Transform>(true))
             {
@@ -1424,16 +1913,34 @@ namespace Vecna
         {
             if (IsServer) this.currentPhase.Value = VecnaPhase.Cooldown;
             this.currentLocalPhase = VecnaPhase.Cooldown;
+            if (this.creatureAnimator != null)
+            {
+                this.creatureAnimator.transform.localPosition = Vector3.zero;
+                this.creatureAnimator.transform.localRotation = Quaternion.identity;
+            }
             this.canKill = false;
+            this.inSpecialAnimation = false;
             this.boomboxRescueTimer = 0f;
             this.isPortalOpen = false;
             this.portalManager?.DestroyEscapePortal();
+
+            Camera mainCam = GameNetworkManager.Instance.localPlayerController.gameplayCamera;
+            if (GameNetworkManager.Instance.localPlayerController.isPlayerDead && StartOfRound.Instance.spectateCamera != null)
+            {
+                mainCam = StartOfRound.Instance.spectateCamera;
+            }
+            if (mainCam != null)
+            {
+                mainCam.cullingMask &= ~(1 << PORTAL_ONLY_LAYER);
+                mainCam.cullingMask &= ~(1 << UPSIDE_DOWN_LAYER);
+            }
 
             if (!this.cursingLocalPlayer && this.spectatorInUpsideDown)
             {
                 this.spectatorInUpsideDown = false;
                 this.audioTools.StopChaseMusic();
                 VecnaVFXHelper.ToggleTeammatesForVictim(this, true);
+                this.hiddenTeammateLayers.Clear();
             }
 
             if (this.cursingPlayer != null)
@@ -1467,6 +1974,11 @@ namespace Vecna
                 {
                     Transform farthest = base.ChooseFarthestNodeFromPosition(this.cursingPlayer.transform.position);
                     if (farthest != null) farNode = farthest;
+                }
+
+                if (this.agent != null)
+                {
+                    this.agent.enabled = true;
                 }
 
                 if (this.agent != null && this.agent.isActiveAndEnabled)
@@ -1512,6 +2024,7 @@ namespace Vecna
                     }
                 }
                 VecnaVFXHelper.ToggleTeammatesForVictim(this, true);
+                this.hiddenTeammateLayers.Clear();
             }
 
             if (this.activeClone != null)
@@ -1581,6 +2094,22 @@ namespace Vecna
 
             PlayerControllerB dyingPlayer = StartOfRound.Instance.allPlayerScripts[victimPlayerId];
             bool isVictim = (GameNetworkManager.Instance.localPlayerController == dyingPlayer);
+
+            VehicleController car = GetPlayerVehicle(dyingPlayer);
+            if (car != null)
+            {
+                if (StartOfRound.Instance != null && StartOfRound.Instance.playersContainer != null)
+                {
+                    dyingPlayer.transform.SetParent(StartOfRound.Instance.playersContainer, true);
+                }
+
+                dyingPlayer.inSpecialInteractAnimation = false;
+                dyingPlayer.inAnimationWithEnemy = null;
+
+                car.SetIgnition(false);
+                if (car.currentDriver == dyingPlayer) car.currentDriver = null;
+                if (car.currentPassenger == dyingPlayer) car.currentPassenger = null;
+            }
 
             if (isVictim)
             {

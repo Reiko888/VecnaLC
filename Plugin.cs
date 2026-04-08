@@ -2,15 +2,16 @@
 using BepInEx.Logging;
 using HarmonyLib;
 using LethalLib.Modules;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using UnityEngine;
 using Vecna.Configuration;
-using System.Linq;
 
 namespace Vecna
 {
-    [BepInPlugin("Reiko88.Vecna", "Vecna", "1.0.0")]
+    [BepInPlugin("Reiko88.Vecna", "Vecna", "1.1.0")]
     [BepInDependency(LethalLib.Plugin.ModGUID)]
     public class Plugin : BaseUnityPlugin
     {
@@ -48,6 +49,8 @@ namespace Vecna
             ClonePrefab = ModAssets.LoadAsset<GameObject>("Scavenger");
             Logger.LogInfo("player clone Prefab loaded successfully!");
 
+            
+
             var vecnaEnemy = ModAssets.LoadAsset<EnemyType>("vecnaEnemy");
             var vecnaTN = ModAssets.LoadAsset<TerminalNode>("VecnaTN");
             var vecnaTK = ModAssets.LoadAsset<TerminalKeyword>("VecnaTK");
@@ -59,7 +62,25 @@ namespace Vecna
             }
 
             NetworkPrefabs.RegisterNetworkPrefab(vecnaEnemy.enemyPrefab);
-            Enemies.RegisterEnemy(vecnaEnemy, BoundConfig.SpawnWeight.Value, Levels.LevelTypes.All, vecnaTN, vecnaTK);
+
+            Dictionary<Levels.LevelTypes, int> vanillaWeights = new Dictionary<Levels.LevelTypes, int>
+            {
+                { Levels.LevelTypes.TitanLevel, 50 },
+                { Levels.LevelTypes.RendLevel, 75 },
+                { Levels.LevelTypes.DineLevel, 55 },
+                { Levels.LevelTypes.OffenseLevel, 30 },
+                { Levels.LevelTypes.MarchLevel, 30 },
+                { Levels.LevelTypes.ExperimentationLevel, 10 },
+                { Levels.LevelTypes.AssuranceLevel, 20 },
+                { Levels.LevelTypes.VowLevel, 20 },
+                { Levels.LevelTypes.ArtificeLevel, 65 },
+                { Levels.LevelTypes.EmbrionLevel, 100 },
+                { Levels.LevelTypes.AdamanceLevel, 55 },
+                { Levels.LevelTypes.Modded, 45 }
+        };
+            Dictionary<string, int> customWeights = new Dictionary<string, int>();
+
+            Enemies.RegisterEnemy(vecnaEnemy, vanillaWeights, customWeights, vecnaTN, vecnaTK);
 
             Logger.LogInfo("Plugin Vecna is loaded and assets are registered!");
         }

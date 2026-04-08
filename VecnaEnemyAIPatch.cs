@@ -76,11 +76,21 @@ namespace Vecna
         [HarmonyPrefix]
         private static void PreventEnemyVisibility(EnemyAI __instance, ref bool enable)
         {
-            if (__instance is VecnaAI) return;
-
             PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
+            if (localPlayer == null) return;
 
-            if (localPlayer != null && VecnaAI.IsPlayerInUpsideDown(localPlayer))
+            if (__instance is VecnaAI vecna)
+            {
+                bool shouldSeeVecna = ((vecna.currentLocalPhase == VecnaAI.VecnaPhase.Chasing) ||
+                                       (vecna.currentLocalPhase == VecnaAI.VecnaPhase.ExecutingKill) ||
+                                       (vecna.currentLocalPhase == VecnaAI.VecnaPhase.VehicleCinematic && !vecna.isCinematicLiftStarted))
+                                       && vecna.IsVictimOrSpectatingVictim();
+                enable = shouldSeeVecna;
+
+                return;
+            }
+
+            if (VecnaAI.IsPlayerInUpsideDown(localPlayer))
             {
                 enable = false;
             }
@@ -128,6 +138,11 @@ namespace Vecna
         [HarmonyPrefix]
         public static bool Prefix(PlayerControllerB __instance, Vector3 pos)
         {
+            if (Vector3.Distance(__instance.transform.position, pos) < 15f)
+            {
+                return true; 
+            }
+
             foreach (VecnaAI vecna in VecnaAI.ActiveInstances)
             {
                 if (vecna != null && vecna.cursingPlayer == __instance)

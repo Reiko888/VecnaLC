@@ -47,7 +47,7 @@ namespace Vecna
 
         private static ParticleSystem GetFromPool(List<ParticleSystem> pool, Func<ParticleSystem> factoryMethod)
         {
-            pool.RemoveAll(p => p == null); // Safety check for scene transitions
+            pool.RemoveAll(p => p == null);
 
             foreach (var ps in pool)
             {
@@ -278,6 +278,15 @@ namespace Vecna
                         isItem = true; break;
                     }
                 }
+
+                if (!isItem && victim.ItemOnlySlot != null)
+                {
+                    if (r.transform.IsChildOf(victim.ItemOnlySlot.transform))
+                    {
+                        isItem = true;
+                    }
+                }
+
                 if (isItem) continue;
 
                 string objName = r.gameObject.name.ToLower();
@@ -406,6 +415,35 @@ namespace Vecna
                                 light.enabled = false;
                                 light.intensity = 0f;
                             }
+                        }
+                    }
+                }
+            }
+
+            if (player.ItemOnlySlot != null)
+            {
+                GrabbableObject item = player.ItemOnlySlot;
+                item.EnableItemMeshes(isVisible);
+
+                if (!isLocalPlayer && !isVisible)
+                {
+                    foreach (var r in item.GetComponentsInChildren<Renderer>())
+                    {
+                        if (r.enabled)
+                        {
+                            vecnaAI.hiddenCosmetics.Add(r);
+                            r.enabled = false;
+                            r.forceRenderingOff = true;
+                        }
+                    }
+
+                    foreach (var light in item.GetComponentsInChildren<Light>())
+                    {
+                        if (light.enabled && light.intensity > 0f)
+                        {
+                            if (!vecnaAI.hiddenLights.ContainsKey(light)) vecnaAI.hiddenLights.Add(light, light.intensity);
+                            light.enabled = false;
+                            light.intensity = 0f;
                         }
                     }
                 }
@@ -677,6 +715,18 @@ namespace Vecna
                                     r.gameObject.layer = VecnaAI.PORTAL_ONLY_LAYER;
                                 }
                             }
+                        }
+                    }
+                }
+
+                if (p.ItemOnlySlot != null)
+                {
+                    foreach (Renderer r in p.ItemOnlySlot.GetComponentsInChildren<Renderer>(true))
+                    {
+                        if (r.gameObject.layer != VecnaAI.PORTAL_ONLY_LAYER)
+                        {
+                            if (!vecnaBrain.hiddenTeammateLayers.ContainsKey(r)) vecnaBrain.hiddenTeammateLayers[r] = r.gameObject.layer;
+                            r.gameObject.layer = VecnaAI.PORTAL_ONLY_LAYER;
                         }
                     }
                 }

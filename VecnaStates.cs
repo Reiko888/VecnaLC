@@ -110,6 +110,120 @@ namespace Vecna
         }
     }
 
+    public class VecnaVehicleCinematicState : IVecnaState
+    {
+        private VecnaAI brain;
+        private bool hasTriggeredLiftAnim = false;
+        public VecnaVehicleCinematicState(VecnaAI brain) { this.brain = brain; }
+        public void Enter() { hasTriggeredLiftAnim = false; }
+        public void Exit() { }
+        public void Update()
+        {
+            if (brain.cinematicVehicle == null)
+            {
+                if (brain.IsServer) brain.EndCinematicAndWaitForExit();
+                return;
+            }
+
+            if (brain.IsServer)
+            {
+                bool playerInCar = (brain.cinematicVehicle.currentDriver == brain.cursingPlayer ||
+                                    brain.cinematicVehicle.currentPassenger == brain.cursingPlayer ||
+                                    brain.cursingPlayer.GetComponentInParent<VehicleController>() == brain.cinematicVehicle);
+
+                if (brain.cursingPlayer == null || !playerInCar || brain.cursingPlayer.isPlayerDead)
+                {
+                    brain.EndCinematicAndWaitForExit();
+                    return;
+                }
+            }
+
+            if (brain.cinematicTimer <= -10f) return;
+
+            if (!brain.vehicleReachedApex)
+            {
+                if (brain.cinematicTimer < 0f)
+                {
+                    brain.cinematicTimer += Time.deltaTime;
+
+                    if (brain.cinematicTimer >= -0.5f && !hasTriggeredLiftAnim)
+                    {
+                        hasTriggeredLiftAnim = true;
+
+                        if (brain.creatureAnimator != null)
+                        {
+                            brain.creatureAnimator.SetTrigger("blastDoor");
+                        }
+
+                        if (brain.liftTelekinesisClip != null && brain.cinematicVehicle.vehicleEngineAudio != null)
+                        {
+                            brain.cinematicVehicle.vehicleEngineAudio.PlayOneShot(brain.liftTelekinesisClip, 1f);
+                        }
+                    }
+
+                    return;
+                }
+
+                brain.cinematicTimer += Time.deltaTime * 0.8f;
+
+                if (brain.cinematicTimer >= 0.5f && !brain.isCinematicLiftStarted)
+                {
+                    brain.isCinematicLiftStarted = true;
+                    if (brain.cursingLocalPlayer) brain.ToggleGhostVisuals(false);
+                }
+
+                if (brain.cinematicVehicle.mainRigidbody != null)
+                {
+                    Vector3 nextPos = Vector3.Lerp(brain.vehicleStartPos, brain.vehicleTargetPos, brain.cinematicTimer);
+                    brain.cinematicVehicle.mainRigidbody.MovePosition(nextPos);
+
+                    Quaternion deltaRotation = Quaternion.Euler(Vector3.up * (Time.deltaTime * 15f));
+                    brain.cinematicVehicle.mainRigidbody.MoveRotation(brain.cinematicVehicle.mainRigidbody.rotation * deltaRotation);
+                }
+
+                if (brain.cinematicTimer >= 1f)
+                {
+                    brain.vehicleReachedApex = true;
+                    brain.cinematicTimer = 0f;
+                }
+            }
+            else
+            {
+                brain.cinematicTimer += Time.deltaTime;
+
+                if (brain.cinematicTimer > 2.5f && brain.IsServer)
+                {
+                    brain.EndCinematicAndWaitForExit();
+                }
+            }
+        }
+    }
+
+    public class VecnaWaitingForExitState : IVecnaState
+    {
+        private VecnaAI brain;
+        public VecnaWaitingForExitState(VecnaAI brain) { this.brain = brain; }
+        public void Enter() { }
+        public void Exit() { }
+        public void Update()
+        {
+            if (!brain.IsServer) return;
+
+            if (brain.cursingPlayer == null || brain.cursingPlayer.isPlayerDead)
+            {
+                brain.ResetHaunt(repelledByMusic: false, playerKilled: false);
+                return;
+            }
+
+            VehicleController car = brain.GetPlayerVehicle(brain.cursingPlayer);
+            if (car == null)
+            {
+                Debug.Log("VECNA: Victim left the vehicle wreckage. Initiating Phase 2.");
+                brain.StartChase();
+            }
+        }
+    }
+
     public class VecnaChaseState : IVecnaState
     {
         private VecnaAI brain;
@@ -134,6 +248,8 @@ namespace Vecna
             if (brain.IsOwner && brain.agent.isActiveAndEnabled && brain.agent.isOnNavMesh)
             {
                 brain.agent.speed = brain.stats.chaseSpeed;
+                VehicleController car = brain.GetPlayerVehicle(brain.cursingPlayer);
+                Vector3 targetPos = car != null ? car.transform.position : brain.cursingPlayer.transform.position;
                 brain.SetDestinationToPosition(brain.cursingPlayer.transform.position, checkForPath: true);
             }
 
@@ -190,8 +306,12 @@ namespace Vecna
 
             brain.environmentTools.BlastDoorsOpen();
 
-            float distToPlayerSq = (brain.transform.position - brain.cursingPlayer.transform.position).sqrMagnitude;
-            if (distToPlayerSq <= brain.stats.killRangeSquared)
+            VehicleController playerCar = brain.GetPlayerVehicle(brain.cursingPlayer);
+            float killDistSq = playerCar != null ? 100f : brain.stats.killRangeSquared;
+            Vector3 checkPos = playerCar != null ? playerCar.transform.position : brain.cursingPlayer.transform.position;
+
+            float distToPlayerSq = (brain.transform.position - checkPos).sqrMagnitude;
+            if (brain.canKill && distToPlayerSq <= killDistSq)
             {
                 brain.TriggerCinematicKill(brain.cursingPlayer);
             }

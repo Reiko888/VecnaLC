@@ -7,7 +7,18 @@ namespace Vecna.Configuration
 {
     public class PluginConfig
     {
-        public ConfigEntry<int> SpawnWeight;
+        public ConfigEntry<int> SpawnWeightTitan;
+        public ConfigEntry<int> SpawnWeightRend;
+        public ConfigEntry<int> SpawnWeightDine;
+        public ConfigEntry<int> SpawnWeightOffense;
+        public ConfigEntry<int> SpawnWeightMarch;
+        public ConfigEntry<int> SpawnWeightExperimentation;
+        public ConfigEntry<int> SpawnWeightAssurance;
+        public ConfigEntry<int> SpawnWeightVow;
+        public ConfigEntry<int> SpawnWeightArtifice;
+        public ConfigEntry<int> SpawnWeightEmbrion;
+        public ConfigEntry<int> SpawnWeightAdamance;
+        public ConfigEntry<int> SpawnWeightModded;
 
         // Phase 1
         public ConfigEntry<float> SpawnInterval;
@@ -26,8 +37,18 @@ namespace Vecna.Configuration
 
         public PluginConfig(ConfigFile cfg)
         {
-            SpawnWeight = cfg.Bind("0. General", "Spawn weight", 30,
-                "The spawn chance weight for Vecna, relative to other existing enemies.");
+            SpawnWeightTitan = cfg.Bind("0. Spawn Weights", "Titan", 50, "Spawn weight of Vecna on Titan.");
+            SpawnWeightRend = cfg.Bind("0. Spawn Weights", "Rend", 75, "Spawn weight of Vecna on Rend.");
+            SpawnWeightDine = cfg.Bind("0. Spawn Weights", "Dine", 55, "Spawn weight of Vecna on Dine.");
+            SpawnWeightOffense = cfg.Bind("0. Spawn Weights", "Offense", 30, "Spawn weight of Vecna on Offense.");
+            SpawnWeightMarch = cfg.Bind("0. Spawn Weights", "March", 30, "Spawn weight of Vecna on March.");
+            SpawnWeightExperimentation = cfg.Bind("0. Spawn Weights", "Experimentation", 10, "Spawn weight of Vecna on Experimentation.");
+            SpawnWeightAssurance = cfg.Bind("0. Spawn Weights", "Assurance", 20, "Spawn weight of Vecna on Assurance.");
+            SpawnWeightVow = cfg.Bind("0. Spawn Weights", "Vow", 20, "Spawn weight of Vecna on Vow.");
+            SpawnWeightArtifice = cfg.Bind("0. Spawn Weights", "Artifice", 65, "Spawn weight of Vecna on Artifice.");
+            SpawnWeightEmbrion = cfg.Bind("0. Spawn Weights", "Embrion", 100, "Spawn weight of Vecna on Embrion.");
+            SpawnWeightAdamance = cfg.Bind("0. Spawn Weights", "Adamance", 55, "Spawn weight of Vecna on Adamance.");
+            SpawnWeightModded = cfg.Bind("0. Spawn Weights", "Modded Moons", 45, "Base spawn weight of Vecna on custom modded moons.");
 
             // Phase 1
             SpawnInterval = cfg.Bind("1. Phase 1 (Stalking)", "Clock Spawn Interval", 40f, "Time in seconds between clock spawns.");
