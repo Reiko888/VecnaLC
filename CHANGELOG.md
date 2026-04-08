@@ -19,3 +19,24 @@ Bug Fixes:
 
 Misc
 - Fixed grammar and spelling mistakes in README
+
+
+
+## 1.0.4
+Updated mod to be compatible with v81
+
+Bug Fixes:
+- Fixed a bug that caused the company cruiser to sink into the floor when vecna spawned. More features and QoL improvements to come in future updates around the cruiser!
+Thank you to Starpinguin25 for reporting this issue to me!
+
+## 1.1.0
+
+Features:
+- Added spawn weight per moon that is customisable in config
+- Added new functionality around the company cruiser involving clocks and the chase
+- Added a new cinematic when cursed player is in company cruiser when Vecna tries to trigger chase
+- Added new voiceline for new cinematic
+- Fixed an issue where others could see items in the new utility item slot, introduced in v81, when in chase
+
+Balance:
+Vecna now has a lower chance to spawn on easier moons, with a much higher chance to spawn on more diffcult moons. This is to give players an opportunity to buy a boombox to counteract Vecna when he is more common.

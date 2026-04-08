@@ -1,5 +1,5 @@
 # Vecna - Stranger Things
-This cinematic mod adds Vecna/001/Henry Creel to Lethal Company with behaviour and abilities heavily inspired by the TV show!
+This cinematic mod adds Vecna/001/Henry Creel to Lethal Company with behaviour and abilities heavily inspired by the TV show! v80/v81 COMPATIBLE
 
 # Vecna's Curse
 
@@ -50,6 +50,15 @@ If you notice a fellow crew member bleeding with no explanation, then this teamm
 - Vecna has the ability to use telekinesis in chase to open doors in front of him. Therefore, closing doors behind you may not delay him the way you would like!
 - Lights flicker in the area of hallucinations and follow the victim during the chase to mimic the effect from the TV show.
 - **This mod involves CUSTOM VOICELINES AND VOICE ACTING for Vecna to create an even more cinematic and immersive experience. More may be added in future, suggest lines you would like to see!**
+- **NBEW** Unique interactions and a cutscene plays when the cursed victim is inside of the company cruiser! See video below.
+
+<details>
+<summary>Cruiser Cutscene Showcase (SPOILERS)</summary>
+
+[![Watch showcase](https://img.youtube.com/vi/kSkncGaNOUE/maxresdefault.jpg)](https://www.youtube.com/watch?v=kSkncGaNOUE)
+
+</details>
+
 
 </details>
 
