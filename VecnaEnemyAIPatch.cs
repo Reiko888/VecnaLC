@@ -1,4 +1,4 @@
-﻿
+
 using GameNetcodeStuff;
 using HarmonyLib;
 using System;
@@ -59,41 +59,121 @@ namespace Vecna
             }
         }
 
-        [HarmonyPatch("Start")]
+    }
+
+    [HarmonyPatch(typeof(PlayerControllerB), "Update")]
+    public class VecnaVoiceMutePatch
+    {
+        private static HashSet<PlayerControllerB> mutedByVecna = new HashSet<PlayerControllerB>();
+
         [HarmonyPostfix]
-        private static void HideNewSpawns(EnemyAI __instance)
+        public static void MuteUpsideDownVoices(PlayerControllerB __instance)
         {
-            if (__instance is VecnaAI) return;
-
-            PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
-            if (localPlayer != null && VecnaAI.IsPlayerInUpsideDown(localPlayer))
+            if (__instance == null || !__instance.isPlayerControlled || __instance.isPlayerDead)
             {
-                __instance.EnableEnemyMesh(false, false);
-            }
-        }
-
-        [HarmonyPatch("EnableEnemyMesh")]
-        [HarmonyPrefix]
-        private static void PreventEnemyVisibility(EnemyAI __instance, ref bool enable)
-        {
-            PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
-            if (localPlayer == null) return;
-
-            if (__instance is VecnaAI vecna)
-            {
-                bool shouldSeeVecna = ((vecna.currentLocalPhase == VecnaAI.VecnaPhase.Chasing) ||
-                                       (vecna.currentLocalPhase == VecnaAI.VecnaPhase.ExecutingKill) ||
-                                       (vecna.currentLocalPhase == VecnaAI.VecnaPhase.VehicleCinematic && !vecna.isCinematicLiftStarted))
-                                       && vecna.IsVictimOrSpectatingVictim();
-                enable = shouldSeeVecna;
-
+                if (mutedByVecna.Contains(__instance))
+                {
+                    if (__instance != null && __instance.currentVoiceChatAudioSource != null)
+                    {
+                        __instance.currentVoiceChatAudioSource.volume = 1f;
+                    }
+                    mutedByVecna.Remove(__instance);
+                }
                 return;
             }
 
-            if (VecnaAI.IsPlayerInUpsideDown(localPlayer))
+            if (__instance.currentVoiceChatAudioSource == null) return;
+
+            PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
+
+            if (localPlayer == null || localPlayer == __instance || localPlayer.isPlayerDead)
             {
-                enable = false;
+                if (mutedByVecna.Contains(__instance))
+                {
+                    __instance.currentVoiceChatAudioSource.volume = 1f;
+                    mutedByVecna.Remove(__instance);
+                }
+                return;
             }
+
+            bool localInTrance = VecnaAI.IsPlayerInUpsideDown(localPlayer);
+            bool targetInTrance = VecnaAI.IsPlayerInUpsideDown(__instance);
+
+            if (localInTrance != targetInTrance)
+            {
+                __instance.currentVoiceChatAudioSource.volume = 0f;
+                mutedByVecna.Add(__instance);
+            }
+            else if (mutedByVecna.Contains(__instance))
+            {
+                __instance.currentVoiceChatAudioSource.volume = 1f;
+                mutedByVecna.Remove(__instance);
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerControllerB), "TeleportPlayer")]
+    public class VecnaTeleportInterceptPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(PlayerControllerB __instance, Vector3 pos)
+        {
+            foreach (VecnaAI vecna in VecnaAI.ActiveInstances)
+            {
+                if (vecna != null && vecna.cursingPlayer == __instance)
+                {
+                    if (vecna.isTeleportingVictimFromVecna) return true;
+
+                    bool isTranced = (vecna.currentLocalPhase == VecnaPhase.HauntChase);
+
+                    if (isTranced)
+                    {
+                        vecna.localVictimClonePos = pos;
+                        vecna.cloneWasTeleportedToShip = true;
+                        if (vecna.activeClone != null)
+                        {
+                            vecna.activeClone.transform.position = pos;
+                        }
+                        //Debug.Log($"VECNA: Teleporter intercepted. Clone moved to {pos}, Victim stayed.");
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(RoundManager), "PlayAudibleNoise")]
+    public class VecnaNoiseSuppressionPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(Vector3 noisePosition)
+        {
+            try
+            {
+                foreach (VecnaAI vecna in VecnaAI.ActiveInstances)
+                {
+                    if (vecna != null && vecna.cursingPlayer != null)
+                    {
+                        bool isInvisiblePhase = vecna.isHuntingEveryone || (vecna.currentLocalPhase == VecnaPhase.HauntChase);
+
+                        if (isInvisiblePhase)
+                        {
+                            float distanceToVictim = Vector3.Distance(noisePosition, vecna.cursingPlayer.transform.position);
+                            if (distanceToVictim < 2f)
+                            {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("VECNA: Safely caught an error in the noise patch: " + e.Message);
+            }
+
+            return true;
         }
     }
 
@@ -123,8 +203,6 @@ namespace Vecna
 
                     if (localInTrance != targetInTrance)
                     {
-                        // INSPIRED BY LEGA STRANGER THINGS MOD, CREDIT TO LEGA FOR THIS SOLUTION
-                        //MULTIPLY THE VOLUME BY 0 TO MUTE IT, INSTEAD OF SETTING IT TO 0, TO PREVENT OTHER MODS/METHODS FROM OVERRIDING THIS CHANGE
                         value *= 0f;
                     }
                 }
@@ -132,69 +210,108 @@ namespace Vecna
         }
     }
 
-    [HarmonyPatch(typeof(PlayerControllerB), "TeleportPlayer")]
-    public class VecnaTeleportInterceptPatch
+    [HarmonyPatch(typeof(PlayAudioAnimationEvent), "PlayAudio1RandomClip")]
+    public class VecnaPlayerCloneSnapParticlesPatch
     {
-        [HarmonyPrefix]
-        public static bool Prefix(PlayerControllerB __instance, Vector3 pos)
+        private static int bloodSpurtIndex = 0;
+
+        [HarmonyPostfix]
+        public static void Postfix(PlayAudioAnimationEvent __instance)
         {
-            if (Vector3.Distance(__instance.transform.position, pos) < 15f)
-            {
-                return true; 
-            }
+            VecnaAI matchingVecna = null;
 
             foreach (VecnaAI vecna in VecnaAI.ActiveInstances)
             {
-                if (vecna != null && vecna.cursingPlayer == __instance)
+                if (vecna != null && vecna.activeClone != null && __instance.transform.IsChildOf(vecna.activeClone.transform))
                 {
-                    bool isTranced = (vecna.currentLocalPhase == VecnaAI.VecnaPhase.Chasing ||
-                                      vecna.currentLocalPhase == VecnaAI.VecnaPhase.ExecutingKill);
-
-                    if (isTranced && vecna.activeClone != null)
-                    {
-                        vecna.activeClone.transform.position = pos;
-                        Debug.Log($"VECNA: Teleporter intercepted. Clone moved to {pos}, Victim stayed in Upside Down.");
-                        return false;
-                    }
+                    matchingVecna = vecna;
+                    break;
                 }
             }
-            return true;
+
+            if (matchingVecna == null) return;
+
+            string targetParticleName = "BloodSpurt" + (bloodSpurtIndex + 1);
+            Transform particleTransform = FindChildRecursive(matchingVecna.activeClone.transform, targetParticleName);
+            if (particleTransform != null)
+            {
+                ParticleSystem ps = particleTransform.GetComponent<ParticleSystem>();
+                if (ps != null)
+                {
+                    ps.Play();
+                }
+            }
+
+            bloodSpurtIndex = (bloodSpurtIndex + 1) % 4;
+        }
+
+        private static Transform FindChildRecursive(Transform parent, string name)
+        {
+            if (parent.name == name) return parent;
+            foreach (Transform child in parent)
+            {
+                Transform result = FindChildRecursive(child, name);
+                if (result != null) return result;
+            }
+            return null;
         }
     }
 
-    [HarmonyPatch(typeof(RoundManager), "PlayAudibleNoise")]
-    public class VecnaNoiseSuppressionPatch
+    [HarmonyPatch(typeof(RoundManager))]
+    public class VecnaScrapSyncPatch
+    {
+        [HarmonyPatch("SyncScrapValuesClientRpc")]
+        [HarmonyPostfix]
+        public static void Postfix(Unity.Netcode.NetworkObjectReference[] spawnedScrap)
+        {
+            if (spawnedScrap == null) return;
+            foreach (var scrapRef in spawnedScrap)
+            {
+                if (scrapRef.TryGet(out Unity.Netcode.NetworkObject netObj))
+                {
+                    GrabbableObject go = netObj.GetComponent<GrabbableObject>();
+                    if (go != null)
+                    {
+                        VecnaAI.levelSpawnedScrap.Add(go);
+                    }
+                }
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerControllerB), "KillPlayerServerRpc")]
+    public class VecnaKillPlayerServerRpcPatch
+    {
+        [HarmonyPostfix]
+        public static void Postfix(PlayerControllerB __instance, int playerId)
+        {
+            foreach (VecnaAI vecna in VecnaAI.ActiveInstances)
+            {
+                if (vecna != null && vecna.IsServer && vecna.cursingPlayer == __instance && vecna.currentLocalPhase == VecnaPhase.HauntChase)
+                {
+                    vecna.ResetHaunt(repelledByMusic: false, playerKilled: true);
+                }
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerControllerB), "SpawnDeadBody")]
+    public class VecnaSpawnDeadBodyPatch
     {
         [HarmonyPrefix]
-        public static bool Prefix(Vector3 noisePosition)
+        public static void Prefix(PlayerControllerB deadPlayerController, ref Vector3 positionOffset)
         {
-            try
+            foreach (VecnaAI vecna in VecnaAI.ActiveInstances)
             {
-                foreach (VecnaAI vecna in VecnaAI.ActiveInstances)
+                if (vecna != null && vecna.cursingPlayer == deadPlayerController && vecna.currentLocalPhase == VecnaPhase.HauntChase)
                 {
-                    if (vecna != null && vecna.cursingPlayer != null)
-                    {
-                        bool isInvisiblePhase = (vecna.currentPhase.Value == VecnaAI.VecnaPhase.Chasing ||
-                                                 vecna.currentPhase.Value == VecnaAI.VecnaPhase.ExecutingKill);
+                    Vector3 clonePos = (vecna.activeClone != null) ? vecna.activeClone.transform.position 
+                                     : (vecna.localVictimClonePos != Vector3.zero ? vecna.localVictimClonePos 
+                                     : deadPlayerController.transform.position);
 
-                        if (isInvisiblePhase)
-                        {
-                            float distanceToVictim = Vector3.Distance(noisePosition, vecna.cursingPlayer.transform.position);
-                            if (distanceToVictim < 2f)
-                            {
-                                return false;
-                            }
-                        }
-                    }
+                    positionOffset = (clonePos + Vector3.up * 0.1f) - deadPlayerController.thisPlayerBody.position;
                 }
             }
-            catch (Exception e)
-            {
-                Debug.LogWarning("VECNA: Safely caught an error in the noise patch: " + e.Message);
-            }
-
-            return true;
         }
     }
-
 }

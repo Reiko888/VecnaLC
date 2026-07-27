@@ -1,347 +1,243 @@
-﻿﻿﻿﻿using GameNetcodeStuff;
+using GameNetcodeStuff;
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using Unity.Netcode;
+using System.Linq;
 using UnityEngine;
 
 namespace Vecna
 {
     public static class VecnaVFXHelper
     {
-        private static List<ParticleSystem> mindFlayerDustPool = new List<ParticleSystem>();
-        private static List<ParticleSystem> massiveBloodSplashPool = new List<ParticleSystem>();
-        private static List<ParticleSystem> smallBloodSplashPool = new List<ParticleSystem>();
-
-        private class PooledParticle : MonoBehaviour
+        private static string GetRelativePath(Transform root, Transform child)
         {
-            public float lifeTime = 2f;
-            private WaitForSeconds waitInstruction;
-
-            private void OnEnable() 
-            { 
-                if (waitInstruction == null) waitInstruction = new WaitForSeconds(lifeTime);
-                StartCoroutine(DisableAfterTime()); 
-            }
-
-            private IEnumerator DisableAfterTime()
+            if (root == child) return "";
+            string path = child.name;
+            Transform parent = child.parent;
+            while (parent != null && parent != root)
             {
-                yield return waitInstruction;
-                gameObject.SetActive(false);
+                path = parent.name + "/" + path;
+                parent = parent.parent;
             }
+            return path;
         }
 
-        public static void PrewarmPools()
+        private static void SetAllChildrenLayer(Transform trans, int layer)
         {
-            mindFlayerDustPool.RemoveAll(p => p == null);
-            massiveBloodSplashPool.RemoveAll(p => p == null);
-            smallBloodSplashPool.RemoveAll(p => p == null);
-
-            if (mindFlayerDustPool.Count == 0)
+            if (trans == null) return;
+            trans.gameObject.layer = layer;
+            foreach (Transform child in trans)
             {
-                for (int i = 0; i < 2; i++) mindFlayerDustPool.Add(SetupMindFlayerDust());
-                for (int i = 0; i < 3; i++) massiveBloodSplashPool.Add(SetupMassiveBloodSplash());
-                for (int i = 0; i < 8; i++) smallBloodSplashPool.Add(SetupSmallBloodSplash());
+                SetAllChildrenLayer(child, layer);
             }
-        }
-
-        private static ParticleSystem GetFromPool(List<ParticleSystem> pool, Func<ParticleSystem> factoryMethod)
-        {
-            pool.RemoveAll(p => p == null);
-
-            foreach (var ps in pool)
-            {
-                if (!ps.gameObject.activeInHierarchy) return ps;
-            }
-
-            ParticleSystem newPs = factoryMethod();
-            pool.Add(newPs);
-            return newPs;
-        }
-
-        public static void CreateMindFlayerDust(Vector3 pos)
-        {
-            ParticleSystem ps = GetFromPool(mindFlayerDustPool, SetupMindFlayerDust);
-            ps.gameObject.transform.position = pos + Vector3.up * 2f;
-            ps.gameObject.SetActive(true);
-            ps.Play();
-        }
-
-        private static ParticleSystem SetupMindFlayerDust()
-        {
-            GameObject dustObj = new GameObject("MindFlayerDust_Pooled");
-            dustObj.SetActive(false);
-            dustObj.AddComponent<PooledParticle>().lifeTime = 6f;
-
-            ParticleSystem ps = dustObj.AddComponent<ParticleSystem>();
-            ParticleSystemRenderer psr = dustObj.GetComponent<ParticleSystemRenderer>();
-            psr.material = new Material(Shader.Find("Sprites/Default"));
-
-            var main = ps.main;
-            main.duration = 2f;
-            main.simulationSpace = ParticleSystemSimulationSpace.World;
-            main.startColor = new ParticleSystem.MinMaxGradient(new Color(0.01f, 0.01f, 0.02f, 0.9f), new Color(0.05f, 0.05f, 0.08f, 0.7f));
-            main.startSize = new ParticleSystem.MinMaxCurve(0.05f, 0.15f);
-            main.startLifetime = new ParticleSystem.MinMaxCurve(2.5f, 5f);
-            main.startSpeed = new ParticleSystem.MinMaxCurve(0.1f, 0.5f);
-            main.gravityModifier = -0.05f; 
-            main.loop = false;
-
-            var emission = ps.emission;
-            emission.rateOverTime = 0;
-            emission.SetBursts(new ParticleSystem.Burst[] { new ParticleSystem.Burst(0f, 400, 600) });
-
-            var shape = ps.shape;
-            shape.shapeType = ParticleSystemShapeType.Box;
-            shape.scale = new Vector3(1.5f, 4.0f, 1.5f);
-
-            var noise = ps.noise;
-            noise.enabled = true;
-            noise.strength = 1.2f;
-            noise.frequency = 1.5f;
-            noise.scrollSpeed = 2.0f;
-
-            var colorOverLifetime = ps.colorOverLifetime;
-            colorOverLifetime.enabled = true;
-            Gradient grad = new Gradient();
-            grad.SetKeys(
-                new GradientColorKey[] { new GradientColorKey(Color.white, 0.0f), new GradientColorKey(Color.white, 1.0f) },
-                new GradientAlphaKey[] { new GradientAlphaKey(1.0f, 0.0f), new GradientAlphaKey(0.0f, 0.8f) }
-            );
-            colorOverLifetime.color = grad;
-
-            var sizeOverLifetime = ps.sizeOverLifetime;
-            sizeOverLifetime.enabled = true;
-            sizeOverLifetime.size = new ParticleSystem.MinMaxCurve(1f, 0f);
-
-            return ps;
-        }
-
-        public static void CreateMassiveBloodSplash(Vector3 pos, bool isBody = false)
-        {
-            ParticleSystem ps = GetFromPool(massiveBloodSplashPool, SetupMassiveBloodSplash);
-            ps.gameObject.transform.position = pos + (isBody ? Vector3.up * 0.5f : Vector3.up * 1.5f);
-
-            var shape = ps.shape;
-            if (isBody)
-            {
-                shape.shapeType = ParticleSystemShapeType.Hemisphere;
-                shape.radius = 0.8f;
-            }
-            else
-            {
-                shape.shapeType = ParticleSystemShapeType.Cone;
-                shape.radius = 0.5f;
-                shape.angle = 30f;
-            }
-
-            ps.gameObject.SetActive(true);
-            ps.Play();
-        }
-
-        private static ParticleSystem SetupMassiveBloodSplash()
-        {
-            GameObject bloodObj = new GameObject("VecnaMassiveBloodSplash_Pooled");
-            bloodObj.SetActive(false);
-            bloodObj.AddComponent<PooledParticle>().lifeTime = 4f;
-
-            ParticleSystem ps = bloodObj.AddComponent<ParticleSystem>();
-            ParticleSystemRenderer psr = bloodObj.GetComponent<ParticleSystemRenderer>();
-            psr.material = new Material(Shader.Find("Sprites/Default"));
-
-            psr.renderMode = ParticleSystemRenderMode.Stretch;
-            psr.cameraVelocityScale = 0f;
-            psr.velocityScale = 0.08f;
-            psr.lengthScale = 2f;
-
-            var main = ps.main;
-            main.duration = 2f;
-            main.loop = false;
-            main.gravityModifier = 1.8f;
-            main.simulationSpace = ParticleSystemSimulationSpace.World;
-
-            main.startColor = new ParticleSystem.MinMaxGradient(new Color(0.4f, 0f, 0f, 1f), new Color(0.08f, 0f, 0f, 1f));
-            main.startSize = new ParticleSystem.MinMaxCurve(0.05f, 0.35f);
-            main.startSpeed = new ParticleSystem.MinMaxCurve(3f, 16f);
-
-            var emission = ps.emission;
-            emission.rateOverTime = 0;
-            emission.SetBursts(new ParticleSystem.Burst[] { new ParticleSystem.Burst(0f, 120, 150) });
-
-            var col = ps.colorOverLifetime;
-            col.enabled = true;
-            Gradient grad = new Gradient();
-            grad.SetKeys(
-                new GradientColorKey[] { new GradientColorKey(Color.white, 0.0f), new GradientColorKey(Color.white, 1.0f) },
-                new GradientAlphaKey[] { new GradientAlphaKey(1.0f, 0.0f), new GradientAlphaKey(1.0f, 0.6f), new GradientAlphaKey(0.0f, 1.0f) }
-            );
-            col.color = grad;
-
-            var sol = ps.sizeOverLifetime;
-            sol.enabled = true;
-            sol.size = new ParticleSystem.MinMaxCurve(1f, 0f);
-
-            var collision = ps.collision;
-            collision.enabled = true;
-            collision.type = ParticleSystemCollisionType.World;
-            collision.mode = ParticleSystemCollisionMode.Collision3D;
-            collision.bounceMultiplier = 0.1f;
-            collision.dampenMultiplier = 0.8f;
-            collision.quality = ParticleSystemCollisionQuality.High;
-
-            return ps;
-        }
-
-        public static void CreateSmallBloodSplash(Vector3 pos)
-        {
-            ParticleSystem ps = GetFromPool(smallBloodSplashPool, SetupSmallBloodSplash);
-            ps.gameObject.transform.position = pos;
-            ps.gameObject.SetActive(true);
-            ps.Play();
-        }
-
-        private static ParticleSystem SetupSmallBloodSplash()
-        {
-            GameObject bloodObj = new GameObject("VecnaBloodSplash_Pooled");
-            bloodObj.SetActive(false);
-            bloodObj.AddComponent<PooledParticle>().lifeTime = 2f;
-
-            ParticleSystem ps = bloodObj.AddComponent<ParticleSystem>();
-            ParticleSystemRenderer psr = bloodObj.GetComponent<ParticleSystemRenderer>();
-            psr.material = new Material(Shader.Find("Sprites/Default"));
-
-            var main = ps.main;
-
-            main.startColor = new Color(0.4f, 0f, 0f, 1f);
-
-            main.duration = 1f;
-            main.startSize = new ParticleSystem.MinMaxCurve(0.08f, 0.25f);
-            main.startSpeed = new ParticleSystem.MinMaxCurve(2f, 5f);
-            main.gravityModifier = 1.5f;
-            main.loop = false;
-
-            var emission = ps.emission;
-            emission.rateOverTime = 0;
-            emission.SetBursts(new ParticleSystem.Burst[] { new ParticleSystem.Burst(0f, 20, 40) });
-
-            var shape = ps.shape;
-            shape.shapeType = ParticleSystemShapeType.Sphere;
-            shape.radius = 0.1f;
-
-            var col = ps.colorOverLifetime;
-            col.enabled = true;
-            Gradient grad = new Gradient();
-            grad.SetKeys(
-                new GradientColorKey[] { new GradientColorKey(Color.white, 0.0f), new GradientColorKey(Color.white, 1.0f) },
-                new GradientAlphaKey[] { new GradientAlphaKey(1.0f, 0.0f), new GradientAlphaKey(1.0f, 0.6f), new GradientAlphaKey(0.0f, 1.0f) }
-            );
-            col.color = grad;
-
-            var sol = ps.sizeOverLifetime;
-            sol.enabled = true;
-            sol.size = new ParticleSystem.MinMaxCurve(0.08f, 0.25f);
-
-            return ps;
         }
 
         public static void DressCloneLikePlayer(GameObject clone, PlayerControllerB victim)
         {
             if (clone == null || victim == null) return;
 
-            SkinnedMeshRenderer cloneRenderer = clone.GetComponentInChildren<SkinnedMeshRenderer>();
-            if (cloneRenderer != null && victim.thisPlayerModel != null)
+            try
             {
-                cloneRenderer.material = victim.thisPlayerModel.material;
-            }
-
-            Dictionary<string, Transform> cloneBones = new Dictionary<string, Transform>();
-            foreach (Transform t in clone.GetComponentsInChildren<Transform>())
-            {
-                string cleanName = t.name.ToLower().Replace(".", "").Replace("_", "");
-                if (cleanName.EndsWith("end")) cleanName = cleanName.Replace("end", "");
-
-                if (!cloneBones.ContainsKey(cleanName)) cloneBones[cleanName] = t;
-            }
-
-            HashSet<Transform> clonedCosmeticRoots = new HashSet<Transform>();
-            Renderer[] victimRenderers = victim.gameObject.GetComponentsInChildren<Renderer>(true);
-
-            foreach (Renderer r in victimRenderers)
-            {
-                if (r == victim.thisPlayerModel || r == victim.thisPlayerModelLOD1 || r == victim.thisPlayerModelLOD2 || r == victim.thisPlayerModelArms) continue;
-
-                bool isItem = false;
-                for (int i = 0; i < victim.ItemSlots.Length; i++)
+                SkinnedMeshRenderer cloneBaseRenderer = clone.GetComponentInChildren<SkinnedMeshRenderer>();
+                if (cloneBaseRenderer != null && victim.thisPlayerModel != null)
                 {
-                    if (victim.ItemSlots[i] != null && r.transform.IsChildOf(victim.ItemSlots[i].transform))
-                    {
-                        isItem = true; break;
-                    }
+                    cloneBaseRenderer.sharedMesh = victim.thisPlayerModel.sharedMesh;
+                    cloneBaseRenderer.sharedMaterials = victim.thisPlayerModel.sharedMaterials;
+                    cloneBaseRenderer.enabled = victim.thisPlayerModel.enabled;
                 }
 
-                if (!isItem && victim.ItemOnlySlot != null)
+                List<GameObject> clonedObjects = new List<GameObject>();
+
+                ApplyMoreCompanyCosmetics(clone, victim, clonedObjects);
+
+                ApplyModelReplacement(clone, victim, clonedObjects);
+
+                foreach (GameObject clonedObj in clonedObjects)
                 {
-                    if (r.transform.IsChildOf(victim.ItemOnlySlot.transform))
+                    if (clonedObj == null) continue;
+                    SetAllChildrenLayer(clonedObj.transform, 0);
+                    foreach (Renderer r in clonedObj.GetComponentsInChildren<Renderer>(true))
                     {
-                        isItem = true;
+                        r.enabled = true;
+                        r.forceRenderingOff = false;
+                        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
+                        r.receiveShadows = true;
                     }
                 }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"VECNA: Exception in DressCloneLikePlayer: {ex}");
+            }
+        }
 
-                if (isItem) continue;
 
-                string objName = r.gameObject.name.ToLower();
-                if (objName.Contains("map") || objName.Contains("radar") || objName.Contains("arrow") ||
-                    objName.Contains("cube") || objName.Contains("screen") || objName.Contains("sticker") ||
-                    objName.Contains("badge") || objName.Contains("shadow") || objName.Contains("canvas") ||
-                    objName.Contains("speak") || r.gameObject.layer == 5 || r.gameObject.layer == 14) continue;
+        //compat
+        private static void ApplyMoreCompanyCosmetics(GameObject clone, PlayerControllerB victim, List<GameObject> clonedObjects)
+        {
+            try
+            {
+                var moreCompanyAssembly = System.AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(a => a.GetName().Name == "MoreCompany");
+                if (moreCompanyAssembly == null) return;
 
-                Transform cosmeticRoot = r.transform;
-                Transform targetBoneOnClone = null;
-
-                while (cosmeticRoot.parent != null)
+                Transform cloneMetarig = clone.transform.Find("metarig");
+                if (cloneMetarig == null)
                 {
-                    string searchName = cosmeticRoot.parent.name.ToLower().Replace(".", "").Replace("_", "");
-                    if (cloneBones.TryGetValue(searchName, out Transform matchingBone))
+                    foreach (Transform t in clone.GetComponentsInChildren<Transform>(true))
                     {
-                        targetBoneOnClone = matchingBone;
+                        if (t.name == "metarig")
+                        {
+                            cloneMetarig = t;
+                            break;
+                        }
+                    }
+                }
+                if (cloneMetarig == null) cloneMetarig = clone.transform;
+
+                var patchesType = moreCompanyAssembly.GetType("MoreCompany.CosmeticPatches");
+                if (patchesType != null)
+                {
+                    var cloneMethod = patchesType.GetMethod("CloneCosmeticsToNonPlayer", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    if (cloneMethod != null)
+                    {
+                        object parentTypeVal = System.Enum.ToObject(moreCompanyAssembly.GetType("MoreCompany.Cosmetics.ParentType"), 3);
+                        cloneMethod.Invoke(null, new object[] { parentTypeVal, cloneMetarig, (int)victim.playerClientId, false });
+                        //Debug.Log($"VECNA: MoreCompany cosmetics applied to clone via reflection for player {victim.playerUsername}");
+
+                        Component cosmeticApplication = cloneMetarig.GetComponent("MoreCompany.Cosmetics.CosmeticApplication")
+                                                     ?? cloneMetarig.GetComponent("CosmeticApplication");
+                        if (cosmeticApplication != null)
+                        {
+                            var spawnedCosmeticsField = cosmeticApplication.GetType().GetField("spawnedCosmetics", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                            if (spawnedCosmeticsField != null)
+                            {
+                                var list = spawnedCosmeticsField.GetValue(cosmeticApplication) as System.Collections.IEnumerable;
+                                if (list != null)
+                                {
+                                    foreach (object item in list)
+                                    {
+                                        if (item is Component compItem && compItem != null)
+                                        {
+                                            clonedObjects.Add(compItem.gameObject);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"VECNA: Error applying MoreCompany cosmetics to clone: {ex}");
+            }
+        }
+
+        private static bool IsSubclassOfTypeName(System.Type type, string typeName)
+        {
+            while (type != null)
+            {
+                if (type.Name == typeName || type.FullName == typeName)
+                    return true;
+                type = type.BaseType;
+            }
+            return false;
+        }
+
+        private static bool IsDescendantOf(Transform parent, Transform child)
+        {
+            Transform p = child;
+            while (p != null)
+            {
+                if (p == parent) return true;
+                p = p.parent;
+            }
+            return false;
+        }
+        //compat
+        private static void ApplyModelReplacement(GameObject clone, PlayerControllerB victim, List<GameObject> clonedObjects)
+        {
+            try
+            {
+                var mrAssembly = System.AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(a => a.GetName().Name == "ModelReplacementAPI");
+                if (mrAssembly == null) return;
+
+                MonoBehaviour bodyReplacement = null;
+                foreach (var comp in victim.GetComponentsInChildren<MonoBehaviour>(true))
+                {
+                    if (comp != null && IsSubclassOfTypeName(comp.GetType(), "BodyReplacementBase"))
+                    {
+                        bodyReplacement = comp;
                         break;
                     }
-                    cosmeticRoot = cosmeticRoot.parent;
                 }
 
-                if (targetBoneOnClone != null && !clonedCosmeticRoots.Contains(cosmeticRoot))
+                if (bodyReplacement == null) return;
+
+                GameObject replacementModel = null;
+                foreach (var f in bodyReplacement.GetType().GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
                 {
-                    string rootName = cosmeticRoot.name.ToLower();
-                    if (rootName.Contains("scavengermodel") || rootName.Contains("metarig") || rootName.Contains("player")) continue;
-
-                    clonedCosmeticRoots.Add(cosmeticRoot);
-
-                    GameObject cosmeticCopy = GameObject.Instantiate(cosmeticRoot.gameObject, targetBoneOnClone);
-
-                    foreach (var netObj in cosmeticCopy.GetComponentsInChildren<NetworkObject>()) UnityEngine.Object.DestroyImmediate(netObj);
-                    foreach (var comp in cosmeticCopy.GetComponentsInChildren<MonoBehaviour>()) UnityEngine.Object.DestroyImmediate(comp);
-                    foreach (var coll in cosmeticCopy.GetComponentsInChildren<Collider>()) UnityEngine.Object.DestroyImmediate(coll);
-
-                    cosmeticCopy.SetActive(true);
-                    cosmeticCopy.transform.localPosition = cosmeticRoot.localPosition;
-                    cosmeticCopy.transform.localRotation = cosmeticRoot.localRotation;
-
-                    Vector3 targetGlobalScale = cosmeticRoot.lossyScale;
-                    Vector3 parentGlobalScale = targetBoneOnClone.lossyScale;
-
-                    cosmeticCopy.transform.localScale = new Vector3(
-                        parentGlobalScale.x > 0 ? targetGlobalScale.x / parentGlobalScale.x : 0f,
-                        parentGlobalScale.y > 0 ? targetGlobalScale.y / parentGlobalScale.y : 0f,
-                        parentGlobalScale.z > 0 ? targetGlobalScale.z / parentGlobalScale.z : 0f
-                    );
-
-                    foreach (Renderer copyRenderer in cosmeticCopy.GetComponentsInChildren<Renderer>())
+                    if (f.FieldType == typeof(GameObject) && (f.Name.Contains("replacement") || f.Name.Contains("model") || f.Name.Contains("Replacement") || f.Name.Contains("Model")))
                     {
-                        copyRenderer.enabled = true;
-                        copyRenderer.forceRenderingOff = false;
-                        copyRenderer.gameObject.layer = 0;
+                        replacementModel = f.GetValue(bodyReplacement) as GameObject;
+                        if (replacementModel != null) break;
                     }
                 }
+
+                if (replacementModel == null)
+                {
+                    foreach (var p in bodyReplacement.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
+                    {
+                        if (p.PropertyType == typeof(GameObject) && (p.Name.Contains("replacement") || p.Name.Contains("model") || p.Name.Contains("Replacement") || p.Name.Contains("Model")))
+                        {
+                            replacementModel = p.GetValue(bodyReplacement) as GameObject;
+                            if (replacementModel != null) break;
+                        }
+                    }
+                }
+
+                if (replacementModel != null)
+                {
+                    GameObject clonedReplacement = GameObject.Instantiate(replacementModel, clone.transform);
+                    clonedReplacement.transform.localPosition = replacementModel.transform.localPosition;
+                    clonedReplacement.transform.localRotation = replacementModel.transform.localRotation;
+                    clonedReplacement.transform.localScale = replacementModel.transform.localScale;
+
+                    clonedObjects.Add(clonedReplacement);
+
+                    foreach (var netObj in clonedReplacement.GetComponentsInChildren<Unity.Netcode.NetworkObject>(true)) UnityEngine.Object.DestroyImmediate(netObj);
+                    foreach (var coll in clonedReplacement.GetComponentsInChildren<Collider>(true)) UnityEngine.Object.DestroyImmediate(coll);
+
+                    var updaterType = mrAssembly.GetType("ModelReplacement.AvatarBodyUpdater.AvatarUpdater") 
+                                   ?? mrAssembly.GetType("ModelReplacement.AvatarUpdater");
+                    if (updaterType != null)
+                    {
+                        var binder = clone.AddComponent<CloneModelBinder>();
+                        binder.Initialize(clone, clonedReplacement, updaterType);
+                    }
+
+                    foreach (SkinnedMeshRenderer smr in clone.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                    {
+                        if (smr != null && !smr.transform.IsChildOf(clonedReplacement.transform))
+                        {
+                            smr.enabled = false;
+                        }
+                    }
+                    foreach (MeshRenderer mr in clone.GetComponentsInChildren<MeshRenderer>(true))
+                    {
+                        if (mr != null && !mr.transform.IsChildOf(clonedReplacement.transform))
+                        {
+                            mr.enabled = false;
+                        }
+                    }
+                    
+                    //Debug.Log("VECNA: ModelReplacementAPI custom model cloned and mapped via reflection using AvatarUpdater!");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"VECNA: Error applying ModelReplacementAPI to clone: {ex}");
             }
         }
 
@@ -368,164 +264,30 @@ namespace Vecna
 
                 if (player.usernameCanvas != null) player.usernameCanvas.gameObject.SetActive(!isLocalPlayer);
                 if (player.usernameBillboardText != null) player.usernameBillboardText.enabled = !isLocalPlayer;
-                if (player.usernameAlpha != null) player.usernameAlpha.alpha = !isLocalPlayer ? 1f : 0f;
             }
             else
             {
-                if (!isLocalPlayer)
+                player.thisPlayerModel.enabled = false;
+                player.thisPlayerModelLOD1.enabled = false;
+                player.thisPlayerModelLOD2.enabled = false;
+                foreach (AudioSource audio in player.gameObject.GetComponentsInChildren<AudioSource>(true))
                 {
-                    player.thisPlayerModel.enabled = false;
-                    player.thisPlayerModelLOD1.enabled = false;
-                    player.thisPlayerModelLOD2.enabled = false;
-                    foreach (AudioSource audio in player.gameObject.GetComponentsInChildren<AudioSource>(true))
-                    {
-                        audio.mute = true;
-                    }
+                    audio.mute = true;
                 }
 
                 if (player.usernameCanvas != null) player.usernameCanvas.gameObject.SetActive(false);
                 if (player.usernameBillboardText != null) player.usernameBillboardText.enabled = false;
-                if (player.usernameAlpha != null) player.usernameAlpha.alpha = 0f;
             }
-
-            for (int i = 0; i < player.ItemSlots.Length; i++)
-            {
-                GrabbableObject item = player.ItemSlots[i];
-                if (item != null)
-                {
-                    item.EnableItemMeshes(isVisible);
-
-                    if (!isLocalPlayer && !isVisible)
-                    {
-                        foreach (var r in item.GetComponentsInChildren<Renderer>())
-                        {
-                            if (r.enabled)
-                            {
-                                vecnaAI.hiddenCosmetics.Add(r);
-                                r.enabled = false;
-                                r.forceRenderingOff = true;
-                            }
-                        }
-
-                        foreach (var light in item.GetComponentsInChildren<Light>())
-                        {
-                            if (light.enabled && light.intensity > 0f)
-                            {
-                                if (!vecnaAI.hiddenLights.ContainsKey(light)) vecnaAI.hiddenLights.Add(light, light.intensity);
-                                light.enabled = false;
-                                light.intensity = 0f;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (player.ItemOnlySlot != null)
-            {
-                GrabbableObject item = player.ItemOnlySlot;
-                item.EnableItemMeshes(isVisible);
-
-                if (!isLocalPlayer && !isVisible)
-                {
-                    foreach (var r in item.GetComponentsInChildren<Renderer>())
-                    {
-                        if (r.enabled)
-                        {
-                            vecnaAI.hiddenCosmetics.Add(r);
-                            r.enabled = false;
-                            r.forceRenderingOff = true;
-                        }
-                    }
-
-                    foreach (var light in item.GetComponentsInChildren<Light>())
-                    {
-                        if (light.enabled && light.intensity > 0f)
-                        {
-                            if (!vecnaAI.hiddenLights.ContainsKey(light)) vecnaAI.hiddenLights.Add(light, light.intensity);
-                            light.enabled = false;
-                            light.intensity = 0f;
-                        }
-                    }
-                }
-            }
-
-            if (!isVisible)
-            {
-                if (!isLocalPlayer)
-                {
-                    foreach (var renderer in player.gameObject.GetComponentsInChildren<Renderer>())
-                    {
-                        if (renderer == player.thisPlayerModel || renderer == player.thisPlayerModelLOD1 || renderer == player.thisPlayerModelLOD2) continue;
-                        if (player.thisPlayerModelArms != null && renderer.gameObject == player.thisPlayerModelArms.gameObject) continue;
-                        if (renderer.gameObject.name.ToLower().Contains("mapdot")) continue;
-
-                        bool isItem = false;
-                        for (int i = 0; i < player.ItemSlots.Length; i++)
-                        {
-                            if (player.ItemSlots[i] != null && renderer.transform.IsChildOf(player.ItemSlots[i].transform))
-                            {
-                                isItem = true; break;
-                            }
-                        }
-                        if (isItem) continue;
-
-                        if (renderer.enabled)
-                        {
-                            vecnaAI.hiddenCosmetics.Add(renderer);
-                            renderer.enabled = false;
-                            renderer.forceRenderingOff = true;
-                        }
-                    }
-
-                    foreach (var light in player.gameObject.GetComponentsInChildren<Light>())
-                    {
-                        if (light.gameObject.name.ToLower().Contains("map") || light.gameObject.name.ToLower().Contains("nightvision")) continue;
-
-                        if (light.enabled && light.intensity > 0f)
-                        {
-                            if (!vecnaAI.hiddenLights.ContainsKey(light)) vecnaAI.hiddenLights.Add(light, light.intensity);
-                            light.enabled = false;
-                            light.intensity = 0f;
-                        }
-                    }
-                }
-            }
-            else
-            {
-                foreach (var renderer in vecnaAI.hiddenCosmetics)
-                {
-                    if (renderer != null)
-                    {
-                        renderer.enabled = true;
-                        renderer.forceRenderingOff = false;
-                    }
-                }
-                vecnaAI.hiddenCosmetics.Clear();
-
-                foreach (var kvp in vecnaAI.hiddenLights)
-                {
-                    if (kvp.Key != null)
-                    {
-                        kvp.Key.enabled = true;
-                        kvp.Key.intensity = kvp.Value;
-                    }
-                }
-                vecnaAI.hiddenLights.Clear();
-            }
-
-            
         }
 
-        public static void ToggleTeammatesForVictim(VecnaAI vecnaAI, bool isVisible)
+        public static void ToggleCursedDimensionVFX(VecnaAI vecnaAI, bool isVisible)
         {
-            if (vecnaAI.cursingPlayer == null) return;
-            PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
-            Camera mainCam = localPlayer.gameplayCamera;
+            if (vecnaAI == null) return;
 
-            if (localPlayer.isPlayerDead && StartOfRound.Instance.spectateCamera != null)
-            {
-                mainCam = StartOfRound.Instance.spectateCamera;
-            }
+            GameObject playerObj = GameNetworkManager.Instance.localPlayerController.gameObject;
+            Camera mainCam = GameNetworkManager.Instance.localPlayerController.gameplayCamera;
+
+            bool isLocalPlayerVictim = (vecnaAI.cursingPlayer == GameNetworkManager.Instance.localPlayerController);
 
             if (!isVisible)
             {
@@ -535,201 +297,105 @@ namespace Vecna
                     vecnaAI.storedCamera = mainCam;
                 }
 
-                mainCam.cullingMask &= ~(1 << VecnaAI.PORTAL_ONLY_LAYER);
-                mainCam.cullingMask |= (1 << VecnaAI.UPSIDE_DOWN_LAYER);
-
-                vecnaAI.hiddenTeammateLayers.Clear();
+                if (isLocalPlayerVictim)
+                {
+                    mainCam.cullingMask |= (1 << VecnaAI.UPSIDE_DOWN_LAYER);
+                }
 
                 foreach (PlayerControllerB p in StartOfRound.Instance.allPlayerScripts)
                 {
-                    if (p != null && p != vecnaAI.cursingPlayer && p.isPlayerControlled)
+                    if (p != null && p.isPlayerControlled)
                     {
-                        foreach (AudioSource audio in p.gameObject.GetComponentsInChildren<AudioSource>(true)) audio.mute = true;
-                        if (p.usernameCanvas != null) p.usernameCanvas.gameObject.SetActive(false);
-                        if (p.usernameBillboardText != null) p.usernameBillboardText.enabled = false;
+                        bool shouldHide = false;
+                        if (isLocalPlayerVictim && p != vecnaAI.cursingPlayer) shouldHide = true;
+                        if (!isLocalPlayerVictim && p == vecnaAI.cursingPlayer) shouldHide = true;
 
-                        if (vecnaAI.cursingPlayer.thisController != null && p.thisController != null)
+                        if (shouldHide)
                         {
-                            Physics.IgnoreCollision(vecnaAI.cursingPlayer.thisController, p.thisController, true);
-                            Physics.IgnoreCollision(vecnaAI.cursingPlayer.playerCollider, p.playerCollider, true);
-                        }
+                            foreach (AudioSource audio in p.gameObject.GetComponentsInChildren<AudioSource>(true)) audio.mute = true;
+                            if (p.usernameCanvas != null) p.usernameCanvas.gameObject.SetActive(false);
+                            if (p.usernameBillboardText != null) p.usernameBillboardText.enabled = false;
 
-                        foreach (Renderer r in p.GetComponentsInChildren<Renderer>(true))
-                        {
-                            if (r.GetComponent<Collider>() != null) continue;
-
-                            string rName = r.gameObject.name.ToLower();
-                            if (rName.Contains("map") || rName.Contains("radar") || rName.Contains("arrow"))
+                            if (isLocalPlayerVictim && vecnaAI.cursingPlayer.thisController != null && p.thisController != null)
                             {
-                                r.enabled = false;
-                                continue;
+                                Physics.IgnoreCollision(vecnaAI.cursingPlayer.thisController, p.thisController, true);
+                                Physics.IgnoreCollision(vecnaAI.cursingPlayer.playerCollider, p.playerCollider, true);
                             }
-
-                            if (!vecnaAI.hiddenTeammateLayers.ContainsKey(r)) vecnaAI.hiddenTeammateLayers[r] = r.gameObject.layer;
-                            r.gameObject.layer = VecnaAI.PORTAL_ONLY_LAYER;
                         }
                     }
-                }
-
-                foreach (EnemyAI enemy in UnityEngine.Object.FindObjectsOfType<EnemyAI>())
-                {
-                    if (enemy != null && enemy != vecnaAI && !enemy.isEnemyDead)
-                    {
-                        foreach (Renderer r in enemy.GetComponentsInChildren<Renderer>(true))
-                        {
-                            if (r.GetComponent<Collider>() != null) continue;
-
-                            if (r.gameObject.name.ToLower().Contains("mapdot"))
-                            {
-                                r.enabled = false;
-                                continue;
-                            }
-                            if (!vecnaAI.hiddenTeammateLayers.ContainsKey(r)) vecnaAI.hiddenTeammateLayers[r] = r.gameObject.layer;
-                            r.gameObject.layer = VecnaAI.PORTAL_ONLY_LAYER;
-                        }
-                    }
-                }
-
-                foreach (Renderer r in vecnaAI.cursingPlayer.GetComponentsInChildren<Renderer>(true))
-                {
-                    if (r.GetComponent<Collider>() != null) continue;
-
-                    if (vecnaAI.cursingPlayer.thisPlayerModelArms != null && r.gameObject == vecnaAI.cursingPlayer.thisPlayerModelArms.gameObject) continue;
-
-                    string rName = r.gameObject.name.ToLower();
-                    if (rName.Contains("map") || rName.Contains("radar") || rName.Contains("arrow"))
-                    {
-                        r.enabled = false;
-                        continue;
-                    }
-
-                    bool isLocalVictim = (localPlayer == vecnaAI.cursingPlayer);
-                    if (isLocalVictim)
-                    {
-                        if (r.gameObject.layer == 23) continue;
-                        if (r == vecnaAI.cursingPlayer.thisPlayerModel ||
-                            r == vecnaAI.cursingPlayer.thisPlayerModelLOD1 ||
-                            r == vecnaAI.cursingPlayer.thisPlayerModelLOD2) continue;
-                    }
-
-                    if (!vecnaAI.hiddenTeammateLayers.ContainsKey(r)) vecnaAI.hiddenTeammateLayers[r] = r.gameObject.layer;
-                    r.gameObject.layer = VecnaAI.UPSIDE_DOWN_LAYER;
-                }
-
-                foreach (Renderer r in vecnaAI.GetComponentsInChildren<Renderer>(true))
-                {
-                    if (r.GetComponent<Collider>() != null) continue;
-
-                    if (r.gameObject.name.ToLower().Contains("mapdot")) continue;
-
-                    if (!vecnaAI.hiddenTeammateLayers.ContainsKey(r)) vecnaAI.hiddenTeammateLayers[r] = r.gameObject.layer;
-                    r.gameObject.layer = VecnaAI.UPSIDE_DOWN_LAYER;
                 }
             }
             else
             {
-                foreach (Renderer r in vecnaAI.cursingPlayer.GetComponentsInChildren<Renderer>(true))
+                if (vecnaAI.storedCameraMask != -1 && mainCam != null)
                 {
-                    string rName = r.gameObject.name.ToLower();
-                    if (rName.Contains("map") || rName.Contains("radar") || rName.Contains("arrow"))
-                    {
-                        r.enabled = true;
-                    }
-                }
-                if (vecnaAI.storedCameraMask != -1)
-                {
-                    Camera camToRestore = vecnaAI.storedCamera != null ? vecnaAI.storedCamera : mainCam;
-                    camToRestore.cullingMask = vecnaAI.storedCameraMask;
-
+                    mainCam.cullingMask = vecnaAI.storedCameraMask;
                     vecnaAI.storedCameraMask = -1;
                     vecnaAI.storedCamera = null;
                 }
 
-                foreach (var kvp in vecnaAI.hiddenTeammateLayers)
-                {
-                    if (kvp.Key != null) kvp.Key.gameObject.layer = kvp.Value;
-                }
-                vecnaAI.hiddenTeammateLayers.Clear();
-
                 foreach (PlayerControllerB p in StartOfRound.Instance.allPlayerScripts)
                 {
-                    if (p != null && p != vecnaAI.cursingPlayer && p.isPlayerControlled)
+                    if (p != null && p.isPlayerControlled)
                     {
                         foreach (AudioSource audio in p.gameObject.GetComponentsInChildren<AudioSource>(true))
                         {
                             audio.mute = false;
                         }
+
                         if (p.usernameCanvas != null) p.usernameCanvas.gameObject.SetActive(true);
                         if (p.usernameBillboardText != null) p.usernameBillboardText.enabled = true;
 
-                        if (vecnaAI.cursingPlayer.thisController != null && p.thisController != null)
+                        if (vecnaAI.cursingPlayer != null && vecnaAI.cursingPlayer.thisController != null && p.thisController != null)
                         {
                             Physics.IgnoreCollision(vecnaAI.cursingPlayer.thisController, p.thisController, false);
                             Physics.IgnoreCollision(vecnaAI.cursingPlayer.playerCollider, p.playerCollider, false);
-                        }
-
-                        foreach (Renderer r in p.GetComponentsInChildren<Renderer>(true))
-                        {
-                            string rName = r.gameObject.name.ToLower();
-                            if (rName.Contains("map") || rName.Contains("radar") || rName.Contains("arrow"))
-                            {
-                                r.enabled = true;
-                            }
-                        }
-                    }
-                }
-
-                foreach (EnemyAI enemy in UnityEngine.Object.FindObjectsOfType<EnemyAI>())
-                {
-                    if (enemy != null && enemy != vecnaAI && !enemy.isEnemyDead)
-                    {
-                        foreach (Renderer r in enemy.GetComponentsInChildren<Renderer>(true))
-                        {
-                            if (r.gameObject.name.ToLower().Contains("mapdot"))
-                            {
-                                r.enabled = true;
-                            }
                         }
                     }
                 }
             }
         }
+    }
 
-        public static void EnforceTeammateHeldItems(VecnaAI vecnaBrain)
+    public class CloneModelBinder : MonoBehaviour
+    {
+        private object avatarUpdaterInstance;
+        private System.Reflection.MethodInfo updateMethod;
+
+        public void Initialize(GameObject clone, GameObject replacementModel, System.Type avatarUpdaterType)
         {
-            foreach (PlayerControllerB p in StartOfRound.Instance.allPlayerScripts)
+            try
             {
-                if (p != null && p != vecnaBrain.cursingPlayer && p.isPlayerControlled && !p.isPlayerDead)
+                avatarUpdaterInstance = System.Activator.CreateInstance(avatarUpdaterType);
+                
+                var assignMethod = avatarUpdaterType.GetMethod("AssignModelReplacement", new System.Type[] { typeof(GameObject), typeof(GameObject) });
+                if (assignMethod != null)
                 {
-                    for (int i = 0; i < p.ItemSlots.Length; i++)
-                    {
-                        if (p.ItemSlots[i] != null)
-                        {
-                            foreach (Renderer r in p.ItemSlots[i].GetComponentsInChildren<Renderer>(true))
-                            {
-                                if (r.GetComponent<Collider>() != null) continue;
-
-                                if (r.gameObject.layer != VecnaAI.PORTAL_ONLY_LAYER)
-                                {
-                                    if (!vecnaBrain.hiddenTeammateLayers.ContainsKey(r)) vecnaBrain.hiddenTeammateLayers[r] = r.gameObject.layer;
-                                    r.gameObject.layer = VecnaAI.PORTAL_ONLY_LAYER;
-                                }
-                            }
-                        }
-                    }
+                    assignMethod.Invoke(avatarUpdaterInstance, new object[] { clone, replacementModel });
                 }
 
-                if (p.ItemOnlySlot != null)
+                updateMethod = avatarUpdaterType.GetMethod("Update", System.Type.EmptyTypes);
+                //Debug.Log("VECNA: CloneModelBinder successfully initialized AvatarUpdater via reflection!");
+            }
+            catch (System.Exception ex)
+            {
+                //Debug.LogError($"VECNA: Error initializing AvatarUpdater in CloneModelBinder: {ex}");
+            }
+        }
+
+        void LateUpdate()
+        {
+            try
+            {
+                if (avatarUpdaterInstance != null && updateMethod != null)
                 {
-                    foreach (Renderer r in p.ItemOnlySlot.GetComponentsInChildren<Renderer>(true))
-                    {
-                        if (r.gameObject.layer != VecnaAI.PORTAL_ONLY_LAYER)
-                        {
-                            if (!vecnaBrain.hiddenTeammateLayers.ContainsKey(r)) vecnaBrain.hiddenTeammateLayers[r] = r.gameObject.layer;
-                            r.gameObject.layer = VecnaAI.PORTAL_ONLY_LAYER;
-                        }
-                    }
+                    updateMethod.Invoke(avatarUpdaterInstance, null);
                 }
+            }
+            catch (System.Exception ex)
+            {
+                updateMethod = null;
+                //Debug.LogError($"VECNA: Error updating AvatarUpdater: {ex}");
             }
         }
     }

@@ -31,23 +31,31 @@ namespace Vecna
 
         public void SpawnEscapePortalAtPosition(BoomboxItem rescuingBoombox, Vector3 position)
         {
-            if (this.vecnaBrain.activeClone == null || this.vecnaBrain.cursingPlayer == null) return;
+            if (this.vecnaBrain.cursingPlayer == null) return;
 
             this.portalRenderTexture = new RenderTexture(1024, 1024, 24, RenderTextureFormat.DefaultHDR);
             this.portalRenderTexture.antiAliasing = 8;
 
             GameObject camObj = new GameObject("VecnaPortalCamera");
 
-            camObj.transform.position = this.vecnaBrain.activeClone.transform.position + (this.vecnaBrain.activeClone.transform.forward * 3f) + Vector3.up * 1.5f;
-            camObj.transform.LookAt(this.vecnaBrain.activeClone.transform.position + Vector3.up * 1f);
+            Vector3 clonePos = this.vecnaBrain.activeClone != null ? this.vecnaBrain.activeClone.transform.position : this.vecnaBrain.localVictimClonePos;
+            Vector3 cloneForward = this.vecnaBrain.activeClone != null ? this.vecnaBrain.activeClone.transform.forward : this.vecnaBrain.cursingPlayer.transform.forward;
+
+            camObj.transform.position = clonePos + (cloneForward * 3f) + Vector3.up * 1.5f;
+            camObj.transform.LookAt(clonePos + Vector3.up * 1f);
 
             this.portalCamera = camObj.AddComponent<Camera>();
             this.portalCamera.targetTexture = this.portalRenderTexture;
 
-            this.portalCamera.cullingMask = ~((1 << 5) | (1 << 14) | (1 << VecnaAI.UPSIDE_DOWN_LAYER));
+            this.portalCamera.cullingMask = this.vecnaBrain.cursingPlayer.gameplayCamera.cullingMask & ~(1 << 5);
             this.portalCamera.nearClipPlane = 0.1f;
 
-            GameObject portalPrefab = Plugin.ModAssets.LoadAsset<GameObject>("VecnaPortalScreen");
+            GameObject portalPrefab = this.vecnaBrain.portalPrefab;
+            if (portalPrefab == null)
+            {
+                Debug.LogError("VECNA: vecnaBrain.portalPrefab is NULL! Escape portal cannot spawn.");
+                return;
+            }
 
             this.activeEscapePortal = UnityEngine.Object.Instantiate(portalPrefab, position, Quaternion.identity);
             this.activeEscapePortal.name = "VecnaEscapePortal";
